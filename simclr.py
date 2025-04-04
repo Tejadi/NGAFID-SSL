@@ -24,7 +24,6 @@ class SimCLR(object):
         self.criterion = torch.nn.CrossEntropyLoss().to(self.args.device)
 
     def info_nce_loss(self, features):
-
         labels = torch.cat([torch.arange(self.args.batch_size) for i in range(self.args.n_views)], dim=0)
         labels = (labels.unsqueeze(0) == labels.unsqueeze(1)).float()
         labels = labels.to(self.args.device)
@@ -54,34 +53,42 @@ class SimCLR(object):
         logits = logits / self.args.temperature
         return logits, labels
 
-    def train(self, train_loader):
+    def train(self, train_loader, wandb):
 
-        scaler = GradScaler(enabled=self.args.fp16_precision)
+        scaler = torch.amp.GradScaler(enabled=self.args.fp16_precision)
 
         # save config file
         save_config_file(self.writer.log_dir, self.args)
 
         n_iter = 0
+        acc_steps = 4
         logging.info(f"Start SimCLR training for {self.args.epochs} epochs.")
         logging.info(f"Training with gpu: {self.args.disable_cuda}.")
 
         for epoch_counter in range(self.args.epochs):
-            for images, _ in tqdm(train_loader):
-                images = torch.cat(images, dim=0)
 
+            loss = torch.tensor(0.0, device=self.args.device)
+            top1, top5 = torch.tensor([0.0], device=self.args.device), torch.tensor([0.0], device=self.args.device)
+            
+            for i, images in enumerate(tqdm(train_loader)):
+
+                # images = torch.cat(images, dim=0)
+                
                 images = images.to(self.args.device)
-
                 with autocast(enabled=self.args.fp16_precision):
                     features = self.model(images)
                     logits, labels = self.info_nce_loss(features)
                     loss = self.criterion(logits, labels)
+                    loss = loss / acc_steps
 
-                self.optimizer.zero_grad()
 
                 scaler.scale(loss).backward()
 
-                scaler.step(self.optimizer)
-                scaler.update()
+                if (i + 1) % acc_steps == 0: 
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                    self.optimizer.zero_grad()
+
 
                 if n_iter % self.args.log_every_n_steps == 0:
                     top1, top5 = accuracy(logits, labels, topk=(1, 5))
@@ -96,6 +103,12 @@ class SimCLR(object):
             if epoch_counter >= 10:
                 self.scheduler.step()
             logging.debug(f"Epoch: {epoch_counter}\tLoss: {loss}\tTop1 accuracy: {top1[0]}")
+
+            wandb.log({
+                'epoch': epoch_counter,
+                'loss': loss,
+                'accuracy': top1[0]
+            })
 
         logging.info("Training has finished.")
         # save model checkpoints
