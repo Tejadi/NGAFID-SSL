@@ -1,3 +1,8 @@
+## References
+This project is inspired by or implements ideas from:  
+- Zerveas, G., Jayaraman, S., Patel, D., Bhamidipaty, A., & Eickhoff, C. (2021). "A Transformer-Based Framework for Multivariate Time Series Representation Learning." In *Proceedings of the 27th ACM SIGKDD Conference on Knowledge Discovery & Data Mining (KDD '21)*, pp. 2114–2124. DOI: [10.1145/3447548.3467401](https://doi.org/10.1145/3447548.3467401).
+
+
 # PyTorch SimCLR: A Simple Framework for Contrastive Learning of Visual Representations
 [![DOI](https://zenodo.org/badge/241184407.svg)](https://zenodo.org/badge/latestdoi/241184407)
 

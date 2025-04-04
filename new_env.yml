@@ -1,0 +1,19 @@
+name: ngafid-ssl
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pandas
+  - pyyaml
+  - scikit-learn
+  - einops
+  - ipykernel
+  - tqdm
+  - transformers
+  - seaborn
+  - torchaudio
+  - pytorch
+  - torchvision
+prefix: /path/to/conda
