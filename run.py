@@ -17,9 +17,12 @@ from sample_flights.combine_flight_data import flight_paths
 from datasets.default_iteration_dataset import DefaultIterationDataset
 from datasets.transformation_dataset import TransformationDataset, TransformationDatasetReverse
 from clustering import visualize
+from utils import load_config
 
 
-SS_PATH = "/home/aidan/data/ngafid/exports/loci_dataset_fixed_keys/flight_safety_scores.csv"
+# Load configuration
+config = load_config()
+SS_PATH = config['paths']['flight_scores']
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -101,14 +104,18 @@ def get_pos_pairs(non_zero=False):
 
 def main():
     args = parser.parse_args()
-    # assert args.n_views == 2, "Only two view training is supported. Please use --n-views 2."
-    # check if gpu training is available
-    if not args.disable_cuda and torch.cuda.is_available():
+    
+    # Override default config with command line arguments if provided
+    config['system']['disable_cuda'] = args.disable_cuda if args.disable_cuda is not None else config['system']['disable_cuda']
+    config['training']['batch_size'] = args.batch_size if args.batch_size is not None else config['training']['batch_size']
+    config['training']['learning_rate'] = args.lr if args.lr is not None else config['training']['learning_rate']
+    config['model']['architecture'] = args.arch if args.arch is not None else config['model']['architecture']
+    
+    if not config['system']['disable_cuda'] and torch.cuda.is_available():
         args.device = torch.device('cuda')
         cudnn.deterministic = True
         cudnn.benchmark = True
         args.gpu_index = 0
-        # args.gpu_index = 0
     else:
         args.device = torch.device('cpu')
         args.gpu_index = -1
@@ -248,7 +255,7 @@ def main():
 #     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_loader), eta_min=0,
 #                                                            last_epoch=-1)
 
-#     #  It’s a no-op if the 'gpu_index' argument is a negative integer or None.
+#     #  It's a no-op if the 'gpu_index' argument is a negative integer or None.
 #     with torch.cuda.device(args.gpu_index):
 #         simclr = SimCLR(model=model, optimizer=optimizer, scheduler=scheduler, args=args)
 #         simclr.train(train_loader)

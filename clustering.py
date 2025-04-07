@@ -9,9 +9,12 @@ import torch
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from utils import load_config
 
-SS_PATH = "/home/aidan/data/ngafid/exports/loci_dataset_fixed_keys/flight_safety_scores.csv"
-AT_PATH = "/home/aidan/data/ngafid/exports/loci_dataset_fixed_keys/aircraft_types.csv"
+config = load_config()
+
+SS_PATH = config['paths']['flight_scores']
+AT_PATH = config['paths']['aircraft_types']
 
 
 def visualize(model, args, dataloader, dr_methods = ["PCA", "tSNE"]):
