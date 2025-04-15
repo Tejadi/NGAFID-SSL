@@ -37,7 +37,7 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 def load_config():
-    config_path = Path(__file__).parent / 'new_env.yaml'
+    config_path = Path(__file__).parent / 'new_env.yml'
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     

@@ -8,8 +8,8 @@ from datetime import datetime
 from torchvision import models
 from data_aug.contrastive_learning_dataset import ContrastiveLearningDataset
 from models.resnet_simclr import ResNetSimCLR
-from models.bert_simclr import BERTSimCLR
-from models.albert_simclr import ALBERTSimCLR
+# from models.bert_simclr import BERTSimCLR
+# from models.albert_simclr import ALBERTSimCLR
 from simclr import SimCLR
 from datasets.tf_idf import ScoreDatasetGenerator
 from datasets.flight_score_dataset import ScorePairDataset
@@ -106,22 +106,23 @@ def main():
     args = parser.parse_args()
     
     # Override default config with command line arguments if provided
-    config['system']['disable_cuda'] = args.disable_cuda if args.disable_cuda is not None else config['system']['disable_cuda']
-    config['training']['batch_size'] = args.batch_size if args.batch_size is not None else config['training']['batch_size']
-    config['training']['learning_rate'] = args.lr if args.lr is not None else config['training']['learning_rate']
-    config['model']['architecture'] = args.arch if args.arch is not None else config['model']['architecture']
-    
-    if not config['system']['disable_cuda'] and torch.cuda.is_available():
-        args.device = torch.device('cuda')
-        cudnn.deterministic = True
-        cudnn.benchmark = True
-        args.gpu_index = 0
-    else:
-        args.device = torch.device('cpu')
-        args.gpu_index = -1
-
+    # config['system']['disable_cuda'] = args.disable_cuda if args.disable_cuda is not None else config['system']['disable_cuda']
+    # config['training']['batch_size'] = args.batch_size if args.batch_size is not None else config['training']['batch_size']
+    # config['training']['learning_rate'] = args.lr if args.lr is not None else config['training']['learning_rate']
+    # config['model']['architecture'] = args.arch if args.arch is not None else config['model']['architecture']
+    # 
+    # if not config['system']['disable_cuda'] and torch.cuda.is_available():
+    #     args.device = torch.device('cuda')
+    #     cudnn.deterministic = True
+    #     cudnn.benchmark = True
+    #     args.gpu_index = 0
+    # else:
+    #     args.device = torch.device('cpu')
+    #     args.gpu_index = -1
+    #
     # args.device = torch.device('cuda:0')
     args.device = torch.device('cuda:0')
+    args.gpu_index = 0
     model = None
 
     wandb.init(
