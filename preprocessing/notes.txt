@@ -1,0 +1,125 @@
+
+Summary of all unique columns across all files:
+Total unique columns: 121
+  -  
+  -  AOASimple
+  -  AltAGL
+  -  AltB
+  -  AltGPS
+  -  AltInd
+  -  AltMSL
+  -  AltMSL Lag Diff
+  -  BaroA
+  -  CAS
+  -  COM1
+  -  COM2
+  -  CRS
+  -  Coordination Index
+  -  DensityRatio
+  -  E1 CHT Divergence
+  -  E1 CHT1
+  -  E1 CHT2
+  -  E1 CHT3
+  -  E1 CHT4
+  -  E1 EGT Divergence
+  -  E1 EGT1
+  -  E1 EGT2
+  -  E1 EGT3
+  -  E1 EGT4
+  -  E1 FFlow
+  -  E1 MAP
+  -  E1 OilP
+  -  E1 OilT
+  -  E1 RPM
+  -  E2 CHT1
+  -  E2 EGT Divergence
+  -  E2 EGT1
+  -  E2 EGT2
+  -  E2 EGT3
+  -  E2 EGT4
+  -  E2 FFlow
+  -  E2 MAP
+  -  E2 OilP
+  -  E2 OilT
+  -  E2 RPM
+  -  FQtyL
+  -  FQtyR
+  -  GndSpd
+  -  HAL
+  -  HCDI
+  -  HDG
+  -  HPLfd
+  -  HPLwas
+  -  IAS
+  -  LOC-I Index
+  -  LatAc
+  -  MagVar
+  -  NormAc
+  -  OAT
+  -  PichC
+  -  Pitch
+  -  Roll
+  -  RollC
+  -  Stall Index
+  -  TAS
+  -  TRK
+  -  Total Fuel
+  -  True Airspeed(ft/min)
+  -  VAL
+  -  VCDI
+  -  VPLwas
+//   ASK
+  -  VSpd
+  -  VSpd Calculated
+  -  VSpdG
+  -  WndDr
+  -  WndSpd
+  -  amp1
+  -  amp2
+  -  number_events = 0
+  -  number_events = 1
+  -  number_events = 10
+  -  number_events = 11
+  -  number_events = 12
+  -  number_events = 13
+  -  number_events = 14
+  -  number_events = 15
+  -  number_events = 16
+  -  number_events = 17
+  -  number_events = 18
+  -  number_events = 19
+  -  number_events = 2
+  -  number_events = 20
+  -  number_events = 21
+  -  number_events = 22
+  -  number_events = 23
+  -  number_events = 24
+  -  number_events = 25
+  -  number_events = 26
+  -  number_events = 27
+  -  number_events = 28
+  -  number_events = 29
+  -  number_events = 3
+  -  number_events = 30
+  -  number_events = 33
+  -  number_events = 34
+  -  number_events = 35
+  -  number_events = 37
+  -  number_events = 38
+  -  number_events = 4
+  -  number_events = 40
+  -  number_events = 44
+  -  number_events = 47
+  -  number_events = 49
+  -  number_events = 5
+  -  number_events = 54
+  -  number_events = 6
+  -  number_events = 60
+  -  number_events = 7
+  -  number_events = 8
+  -  number_events = 9
+  -  volt1
+  -  volt2
+  - #AfcsOn
+  - #AltAGL
+  - #AltB
