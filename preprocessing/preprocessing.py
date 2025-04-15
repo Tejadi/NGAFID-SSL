@@ -48,8 +48,6 @@ def main(args):
                 #don't save flight if it's too long and pad_length is set
                 continue
 
-
-        ##handle col standardization and col set
         if na_strategy == 'zero':
             flight_data = flight_data.fillna(0)
         else:
