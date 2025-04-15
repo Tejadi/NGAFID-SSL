@@ -37,9 +37,7 @@ def main(args):
             continue
         
         if drop_length:
-            if len(flight_data) >= drop_length:
-                flight_data.to_csv(output_path / flight_path.name, index=False)
-            else:
+            if len(flight_data) < drop_length:
                 #don't save flight if it's too short and drop_length is set
                 continue
         
@@ -57,7 +55,7 @@ def main(args):
         else:
             flight_data = flight_data.ffill().bfill() #bfill to fill first row of NA values
         
-        pd.to_csv(output_path / flight_path.name, index=False)
+        flight_data.to_csv(output_path / flight_path.name, index=False)
 
 
 def parse_arguments():
