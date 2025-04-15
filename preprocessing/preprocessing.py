@@ -21,14 +21,10 @@ def main(args):
     columns_names_dict = pd.read_json('standard_column_names.json')['columns'].to_dict()
 
     if cols_filename:
-        columns_set = set(pd.read_csv(cols_filename))
+        columns_set = set(pd.read_csv(cols_filename, header=None).squeeze())
 
     for flight_path in flight_paths:
         flight_data = pd.read_csv(flight_path, na_values=[' NaN', 'NaN', 'NaN '])
-        
-        # Clean up column names
-        rename_dict = {col: columns_names_dict[col] for col in flight_data.columns if col in columns_names_dict}
-        flight_data = flight_data.rename(columns=rename_dict)
 
         # drop flights missing columns
         flight_cols = set(flight_data.columns)
@@ -100,8 +96,8 @@ def parse_arguments():
     parser.add_argument(
         '-cols',
         type=str,
-        default='default_columns.csv',
-        help='Indicate the columns a flight must contain. Flights with missing columns will be dropped.'
+        default='default_columns.txt',
+        help='Indicate the columns a flight must contain. Flights with missing columns will be dropped. Provide a txt filename with newline separated column names'
     )
     return parser.parse_args()
 
