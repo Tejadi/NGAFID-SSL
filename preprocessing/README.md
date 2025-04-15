@@ -1,0 +1,83 @@
+## Preprocessing instructions
+#### cols:
+Indicate the columns a flight must contain. Flights with missing columns will be dropped. Provide a txt filename with newline separated column names
+Summary of all unique columns across all files:
+
+Total unique columns: 121 - 
+
+- AOASimple 
+- AltAGL 
+- AltB 
+- AltGPS 
+- AltInd 
+- AltMSL 
+- AltMSL Lag Diff 
+- BaroA 
+- CAS 
+- COM1 
+- COM2 
+- CRS 
+- Coordination Index 
+- DensityRatio 
+- E1 CHT Divergence 
+- E1 CHT1 
+- E1 CHT2 
+- E1 CHT3 
+- E1 CHT4 
+- E1 EGT Divergence 
+- E1 EGT1 
+- E1 EGT2 
+- E1 EGT3 
+- E1 EGT4 
+- E1 FFlow 
+- E1 MAP 
+- E1 OilP 
+- E1 OilT 
+- E1 RPM 
+- E2 CHT1 
+- E2 EGT Divergence 
+- E2 EGT1 
+- E2 EGT2 
+- E2 EGT3 
+- E2 EGT4 
+- E2 FFlow 
+- E2 MAP 
+- E2 OilP 
+- E2 OilT 
+- E2 RPM 
+- FQtyL 
+- FQtyR 
+- GndSpd 
+- HAL 
+- HCDI 
+- HDG 
+- HPLfd 
+- HPLwas 
+- IAS 
+- LOC
+-I Index 
+- LatAc 
+- MagVar 
+- NormAc 
+- OAT 
+- PichC 
+- Pitch 
+- Roll 
+- RollC 
+- Stall Index 
+- TAS 
+- TRK 
+- Total Fuel 
+- True Airspeed(ft/min) 
+- VAL 
+- VCDI 
+- VPLwas 
+- VSpd 
+- VSpd Calculated 
+- VSpdG 
+- WndDr 
+- WndSpd 
+- amp1 
+- amp2 
+- volt1 
+- volt2
