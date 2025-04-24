@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 import pandas as pd
+from tqdm import tqdm
 
 def main(args):
     """
@@ -16,18 +17,21 @@ def main(args):
     na_strategy = args.na
     cols_filename = args.cols
 
+    # Create output directory if it doesn't exist
+    output_path.mkdir(parents=True, exist_ok=True)
+
     # Get all file paths in the input directory
     flight_paths = [f for f in input_path.glob('*.csv')]
-    columns_names_dict = pd.read_json('standard_column_names.json')['columns'].to_dict()
 
     if cols_filename:
-        columns_set = set(pd.read_csv(cols_filename, header=None).squeeze())
+        with open(cols_filename, 'r') as f:
+            columns_set = set([line.strip().replace(' ', '').lower() for line in f if line.strip()])
 
-    for flight_path in flight_paths:
+    for flight_path in tqdm(flight_paths, desc="Processing flights"):
         flight_data = pd.read_csv(flight_path, na_values=[' NaN', 'NaN', 'NaN '])
 
         # drop flights missing columns
-        flight_cols = set(flight_data.columns)
+        flight_cols = set([column.strip().replace(' ', '').lower() for column in flight_data.columns])
         mutual = flight_cols & columns_set
         if len(mutual) != len(columns_set):
             continue
@@ -39,7 +43,7 @@ def main(args):
         
         if pad_length:
             if len(flight_data) <= pad_length:
-                flight_data = flight_data.reindex(range(pad_length)).ffil()
+                flight_data = flight_data.reindex(range(pad_length)).ffill()
             else:
                 #don't save flight if it's too long and pad_length is set
                 continue
@@ -50,7 +54,6 @@ def main(args):
             flight_data = flight_data.ffill().bfill() #bfill to fill first row of NA values
         
         flight_data.to_csv(output_path / flight_path.name, index=False)
-
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -92,7 +95,7 @@ def parse_arguments():
     parser.add_argument(
         '-cols',
         type=str,
-        default='default_columns.txt',
+        default='preprocessing/default_columns.txt',
         help='Indicate the columns a flight must contain. Flights with missing columns will be dropped. Provide a txt filename with newline separated column names'
     )
     return parser.parse_args()

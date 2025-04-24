@@ -1,7 +1,23 @@
 ## Preprocessing instructions
-#### cols:
-Indicate the columns a flight must contain. Flights with missing columns will be dropped. Provide a txt filename with newline separated column names
-Summary of all unique columns across all files:
+Load dataset with
+```
+git lfs install
+git clone https://huggingface.co/datasets/CDuong04/NGAFID-LOCI-Data
+```
+Preprocess the dataset using the script in preprocessing.py.
+
+Example usage:
+```
+python preprocessing/preprocessing.py \
+    NGAFID-LOCI-Data/flights \
+    -o preprocessed_data \
+    -pad 10000 \
+    -drop 1000 \
+    -na zero \
+    -cols preprocessing/default_columns.txt
+```
+
+Note: you have to run the file in a parent directory of the input data and the preprocessing script. Argument paths should all be relative to this directory.
 
 Total unique columns: 121 - 
 
