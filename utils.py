@@ -44,8 +44,8 @@ def load_config():
     # Convert relative paths to absolute
     # Make sure load_config works without converting paths to absolute first
     
-    # base_dir = Path(__file__).parent
-    # for key, path in config['paths'].items():
-    #     config['paths'][key] = str(base_dir / path)
+    base_dir = Path(__file__).parent
+    for key, path in config['paths'].items():
+        config['paths'][key] = str(base_dir / path)
     
     return config

@@ -1,12 +1,12 @@
 name: ngafid-ssl
 
 paths:
-  flight_scores: "/home/aidan/data/ngafid/exports/loci_dataset_fixed_keys/flight_safety_scores.csv"
+  flight_scores: "datasets/flight_safety_scores.csv"
   aircraft_types: "/home/aidan/data/ngafid/exports/loci_dataset_fixed_keys/aircraft_types.csv"
   csv_file: "/mnt/crucial/data/ngafid/exports/loci_dataset_fixed_keys/events/all_events.csv"
   flights_path: "/mnt/crucial/data/ngafid/exports/loci_dataset_fixed_keys/flights"
   flight_id_file: "/mnt/crucial/data/ngafid/exports/loci_dataset_fixed_keys/flight_ids.csv"
-
+  fixed_keys_flights: "datasets/sample_flights_fixed_keys"
 channels:
   - pytorch
   - conda-forge

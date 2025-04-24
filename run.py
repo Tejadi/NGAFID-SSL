@@ -8,8 +8,6 @@ from datetime import datetime
 from torchvision import models
 from data_aug.contrastive_learning_dataset import ContrastiveLearningDataset
 from models.resnet_simclr import ResNetSimCLR
-# from models.bert_simclr import BERTSimCLR
-# from models.albert_simclr import ALBERTSimCLR
 from simclr import SimCLR
 from datasets.tf_idf import ScoreDatasetGenerator
 from datasets.flight_score_dataset import ScorePairDataset
@@ -69,7 +67,10 @@ parser.add_argument('--temperature', default=0.07, type=float,
 parser.add_argument('--n-views', default=2, type=int, metavar='N',
                     help='Number of views for contrastive learning training.')
 # parser.add_argument('--gpu-index', default=0, type=int, help='Gpu index.')
-parser.add_argument('--job-name', type=str, required=True, dest='job_name')
+parser.add_argument('--job-name', type=str, required=False, dest='job_name',
+                    help='Job name for wandb logging (required if wandb is enabled)')
+parser.add_argument('--disable-wandb', action='store_true',
+                    help='Disable Weights & Biases logging')
 
 def dataloader_function(batch):
     first_elements, second_elements = zip(*batch)
@@ -125,18 +126,21 @@ def main():
     args.gpu_index = 0
     model = None
 
-    wandb.init(
-        # set the wandb project where this run will be logged
-        project="ngafid-ssl-fall-24",
-        entity="ngafid-ssl",
-        name=args.job_name,
+    if not args.disable_wandb:
+        if args.job_name is None:
+            raise ValueError("--job-name is required when wandb logging is enabled")
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="ngafid-ssl-fall-24",
+            entity="ngafid-ssl",
+            name=args.job_name,
 
-        # track hyperparameters and run metadata
-        config={
-            'learning_rate': args.lr,
-            'epochs': args.epochs,
-        }
-    )
+            # track hyperparameters and run metadata
+            config={
+                'learning_rate': args.lr,
+                'epochs': args.epochs,
+            }
+        )
 
     # run_id = f"{datetime.now():%Y-%m-%d}"
     # wapi = wandb.Api()
@@ -148,9 +152,13 @@ def main():
     all_pairs = get_pos_pairs()
     non_zero_pairs = get_pos_pairs(non_zero=True)
     
+    # what is going on here?
     flight_id_to_paths = flight_paths()
 
-    flight = pd.read_csv(flight_id_to_paths['file_path'][951])
+    print(flight_id_to_paths['file_path'])
+
+    # flight = pd.read_csv(flight_id_to_paths['file_path'][951])
+    flight = pd.read_csv(flight_id_to_paths['file_path'][33])
     flight = flight.iloc[:, 2:]
 
     # dataset = ScorePairDataset(all_pairs, flight_id_to_paths)
@@ -216,7 +224,7 @@ def main():
         args.batch_size = batch_size
         with torch.cuda.device(args.gpu_index):
             simclr = SimCLR(model=model, optimizer=optimizer, scheduler=scheduler, args=args)
-            simclr.train(train_loader, wandb)
+            simclr.train(train_loader, None if args.disable_wandb else wandb)
 
         visualize(model, args, visualization_loader, ["PCA", "TSNE"])
 

@@ -1,9 +1,12 @@
 import pandas as pd
 import glob
 import os
+from utils import load_config
 
-DIR_PATH = '/oscar/data/sbach/bats/projects/ngafid/loci_dataset_fixed_keys/flights'
+config = load_config()
 
+# DIR_PATH = '/oscar/data/sbach/bats/projects/ngafid/loci_dataset_fixed_keys/flights'
+DIR_PATH = config['paths']['fixed_keys_flights']
 def flight_paths():
 
     csv_files = glob.glob(os.path.join(DIR_PATH, "*.csv"))
@@ -24,6 +27,5 @@ def flight_paths():
     combined_df = pd.DataFrame.from_dict(data, orient='index', columns=['file_path'])
 
     combined_df.index.name = 'flight_id'
-
     return combined_df
 
