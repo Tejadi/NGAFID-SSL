@@ -1,9 +1,42 @@
 ## Preprocessing instructions
-Load dataset with
-```
-git lfs install
-git clone https://huggingface.co/datasets/CDuong04/NGAFID-LOCI-Data
-```
+
+Steps for loading dataset:
+
+1. Install Git LFS:
+
+    Using Homebrew (macOS):
+
+        If you have Homebrew installed, you can install Git LFS by running:
+            brew install git-lfs
+
+    Using Package Manager (Linux):
+
+        For Debian-based systems (like Ubuntu), you can use:
+            sudo apt-get install git-lfs
+
+        For Red Hat-based systems (like Fedora), you can use:
+            sudo dnf install git-lfs
+
+    Using Installer (Windows):
+
+        Download the Git LFS installer from the Git LFS website and run it.
+
+2. Initialize Git LFS:
+
+    After installing Git LFS, you need to initialize it in your repository:
+
+        git lfs install
+    
+    You can verify the initilization with:
+
+        git lfs version
+
+3. Load dataset:
+
+    Load the dataset with:
+    
+        git clone https://huggingface.co/datasets/CDuong04/NGAFID-LOCI-Data
+
 Preprocess the dataset using the script in preprocessing.py.
 
 Example usage:

@@ -122,6 +122,20 @@ def main():
     #     args.gpu_index = -1
     #
     # args.device = torch.device('cuda:0')
+
+    args = parser.parse_args()
+    # assert args.n_views == 2, "Only two view training is supported. Please use --n-views 2."
+    # check if gpu training is available
+    if not args.disable_cuda and torch.cuda.is_available():
+        args.device = torch.device('cuda')
+        cudnn.deterministic = True
+        cudnn.benchmark = True
+        args.gpu_index = 0
+        # args.gpu_index = 0
+    else:
+        args.device = torch.device('cpu')
+        args.gpu_index = -1
+
     args.device = torch.device('cuda:0')
     args.gpu_index = 0
     model = None
@@ -147,15 +161,13 @@ def main():
     # run = wapi.run(f"ngafid-ssl/ngafid-ssl-fall-24/{run_id}")
     # run.update()
 
-    # score_generator = ScoreDatasetGenerator()
+    score_generator = ScoreDatasetGenerator()
 
     all_pairs = get_pos_pairs()
     non_zero_pairs = get_pos_pairs(non_zero=True)
     
     # what is going on here?
     flight_id_to_paths = flight_paths()
-
-    print(flight_id_to_paths['file_path'])
 
     # flight = pd.read_csv(flight_id_to_paths['file_path'][951])
     flight = pd.read_csv(flight_id_to_paths['file_path'][33])

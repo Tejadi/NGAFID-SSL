@@ -20,8 +20,8 @@ from utils import load_config
 
 config = load_config()
 
-CSV_FILE = config['paths']['csv_file']
-FLIGHTS_PATH = config['paths']['flights_path']
+EVENTS = config['paths']['events']
+FLIGHTS_PATH = config['paths']['fixed_keys_flights']
 FLIGHT_ID_FILE = config['paths']['flight_id_file']
 
 
@@ -30,7 +30,7 @@ FLIGHTS = glob.glob(os.path.join(FLIGHTS_PATH, "*.csv"))
 
 class ScoreDatasetGenerator():
   def __init__(self):
-    self.events = pd.read_csv(CSV_FILE)
+    self.events = pd.read_csv(EVENTS)
     self.flight_ids = pd.read_csv(FLIGHT_ID_FILE)
     self.scores = None
 
@@ -61,7 +61,7 @@ class ScoreDatasetGenerator():
     self.scores = pd.merge(self.flight_ids, flights_tfidf, on='flight_id', how='left')
     self.scores['tfidf'] = self.scores['tfidf'].fillna(0)
 
-    self.scores.to_csv("/mnt/crucial/data/ngafid/exports/loci_dataset_fixed_keys/flight_safety_scores.csv", index=False)
+    self.scores.to_csv("NGAFID-LOCI-Data/flight_safety_scores.csv", index=False)
 
   def plot_non_zero_scores(self):
     sns.histplot(self.scores[self.scores['tfidf'] > 0]['tfidf'], kde=True)
