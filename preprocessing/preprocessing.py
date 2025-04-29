@@ -35,6 +35,8 @@ def main(args):
         mutual = flight_cols & columns_set
         if len(mutual) != len(columns_set):
             continue
+        # grab just specified columns
+        flight_data = flight_data[list(columns_set)]
         
         if drop_length:
             if len(flight_data) < drop_length:
