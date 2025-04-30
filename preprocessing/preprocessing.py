@@ -36,6 +36,11 @@ def main(args):
         if len(mutual) != len(columns_set):
             continue
         
+        # Create a mapping from lowercase column names to original column names
+        col_mapping = {col.strip().replace(' ', '').lower(): col for col in flight_data.columns}
+        # Keep only the columns from columns_set
+        flight_data = flight_data[[col_mapping[col] for col in columns_set]]
+        
         if drop_length:
             if len(flight_data) < drop_length:
                 #don't save flight if it's too short and drop_length is set

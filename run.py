@@ -131,13 +131,13 @@ def main():
         cudnn.deterministic = True
         cudnn.benchmark = True
         args.gpu_index = 0
-        # args.gpu_index = 0
     else:
         args.device = torch.device('cpu')
         args.gpu_index = -1
 
-    args.device = torch.device('cuda:0')
-    args.gpu_index = 0
+    # Remove the forced CUDA assignment
+    # args.device = torch.device('cuda:0')
+    # args.gpu_index = 0
     model = None
 
     if not args.disable_wandb:
@@ -234,7 +234,11 @@ def main():
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(train_loader), eta_min=0, last_epoch=-1)
         
         args.batch_size = batch_size
-        with torch.cuda.device(args.gpu_index):
+        if not args.disable_cuda and torch.cuda.is_available():
+            with torch.cuda.device(args.gpu_index):
+                simclr = SimCLR(model=model, optimizer=optimizer, scheduler=scheduler, args=args)
+                simclr.train(train_loader, None if args.disable_wandb else wandb)
+        else:
             simclr = SimCLR(model=model, optimizer=optimizer, scheduler=scheduler, args=args)
             simclr.train(train_loader, None if args.disable_wandb else wandb)
 

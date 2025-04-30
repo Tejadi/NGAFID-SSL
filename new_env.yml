@@ -5,7 +5,7 @@ paths:
   aircraft_types: "NGAFID-LOCI-Data/aircraft_types.csv"
   events: "NGAFID-LOCI-Data/events.csv"
   flight_id_file: "NGAFID-LOCI-Data/flight_ids.csv"
-  fixed_keys_flights: "preprocessed_data"
+  fixed_keys_flights: "preprocessed_data2"
 channels:
   - pytorch
   - conda-forge
