@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
+import os
 
 def main(args):
     """
@@ -16,6 +17,7 @@ def main(args):
     drop_length = args.drop
     na_strategy = args.na
     cols_filename = args.cols
+    delete_original = args.delete_original
 
     # Create output directory if it doesn't exist
     output_path.mkdir(parents=True, exist_ok=True)
@@ -28,37 +30,53 @@ def main(args):
             columns_set = set([line.strip().replace(' ', '').lower() for line in f if line.strip()])
 
     for flight_path in tqdm(flight_paths, desc="Processing flights"):
-        flight_data = pd.read_csv(flight_path, na_values=[' NaN', 'NaN', 'NaN '])
+        try:
+            flight_data = pd.read_csv(flight_path, na_values=[' NaN', 'NaN', 'NaN '])
 
-        # drop flights missing columns
-        flight_cols = set([column.strip().replace(' ', '').lower() for column in flight_data.columns])
-        mutual = flight_cols & columns_set
-        if len(mutual) != len(columns_set):
-            continue
-        
-        # Create a mapping from lowercase column names to original column names
-        col_mapping = {col.strip().replace(' ', '').lower(): col for col in flight_data.columns}
-        # Keep only the columns from columns_set
-        flight_data = flight_data[[col_mapping[col] for col in columns_set]]
-        
-        if drop_length:
-            if len(flight_data) < drop_length:
-                #don't save flight if it's too short and drop_length is set
+            # drop flights missing columns
+            flight_cols = set([column.strip().replace(' ', '').lower() for column in flight_data.columns])
+            mutual = flight_cols & columns_set
+            if len(mutual) != len(columns_set):
+                if delete_original:
+                    os.remove(flight_path)
                 continue
-        
-        if pad_length:
-            if len(flight_data) <= pad_length:
-                flight_data = flight_data.reindex(range(pad_length)).ffill()
+            
+            # Create a mapping from lowercase column names to original column names
+            col_mapping = {col.strip().replace(' ', '').lower(): col for col in flight_data.columns}
+            # Keep only the columns from columns_set
+            flight_data = flight_data[[col_mapping[col] for col in columns_set]]
+            
+            if drop_length:
+                if len(flight_data) < drop_length:
+                    if delete_original:
+                        os.remove(flight_path)
+                    continue
+            
+            if pad_length:
+                if len(flight_data) <= pad_length:
+                    flight_data = flight_data.reindex(range(pad_length)).ffill()
+                else:
+                    if delete_original:
+                        os.remove(flight_path)
+                    continue
+
+            if na_strategy == 'zero':
+                flight_data = flight_data.fillna(0)
             else:
-                #don't save flight if it's too long and pad_length is set
-                continue
-
-        if na_strategy == 'zero':
-            flight_data = flight_data.fillna(0)
-        else:
-            flight_data = flight_data.ffill().bfill() #bfill to fill first row of NA values
-        
-        flight_data.to_csv(output_path / flight_path.name, index=False)
+                flight_data = flight_data.ffill().bfill() #bfill to fill first row of NA values
+            
+            # Save processed file
+            output_file = output_path / flight_path.name
+            flight_data.to_csv(output_file, index=False)
+            
+            # Delete original file if flag is set and output file exists
+            if delete_original and output_file.exists():
+                os.remove(flight_path)
+                
+        except Exception as e:
+            print(f"Error processing {flight_path}: {str(e)}")
+            if delete_original:
+                os.remove(flight_path)
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -102,6 +120,11 @@ def parse_arguments():
         type=str,
         default='preprocessing/default_columns.txt',
         help='Indicate the columns a flight must contain. Flights with missing columns will be dropped. Provide a txt filename with newline separated column names'
+    )
+    parser.add_argument(
+        '--delete-original',
+        action='store_true',
+        help='Delete original files after preprocessing (including files that fail preprocessing criteria)'
     )
     return parser.parse_args()
 

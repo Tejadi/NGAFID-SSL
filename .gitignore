@@ -1,2 +1,7 @@
 NGAFID-LOCI-Data/
 processed_data/
+preprocessed_data/
+preprocessed_data2/
+__pycache__/
+wandb/
+runs/

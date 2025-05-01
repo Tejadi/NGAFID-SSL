@@ -192,8 +192,6 @@ def main():
 
     if args.inference:
         model = ResNetSimCLR(base_model=args.arch, out_dim=args.out_dim)
-        # model = BERTSimCLR(out_dim=args.out_dim)
-        # model = ALBERTSimCLR(out_dim=args.out_dim)
 
 
         state_dict = torch.load(args.parameters, map_location=args.device)
