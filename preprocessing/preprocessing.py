@@ -40,11 +40,10 @@ def main(args):
                 if delete_original:
                     os.remove(flight_path)
                 continue
-            
-            # Create a mapping from lowercase column names to original column names
-            col_mapping = {col.strip().replace(' ', '').lower(): col for col in flight_data.columns}
-            # Keep only the columns from columns_set
-            flight_data = flight_data[[col_mapping[col] for col in columns_set]]
+        
+            flight_data.columns = [col.strip().replace(' ', '').lower() for col in flight_data.columns]
+
+            flight_data = flight_data[list(columns_set)]
             
             if drop_length:
                 if len(flight_data) < drop_length:

@@ -170,8 +170,8 @@ def main():
     flight_id_to_paths = flight_paths()
 
     # flight = pd.read_csv(flight_id_to_paths['file_path'][951])
-    flight = pd.read_csv(flight_id_to_paths['file_path'][33])
-    flight = flight.iloc[:, 2:]
+    # flight = pd.read_csv(flight_id_to_paths['file_path'][33])
+    # flight = flight.iloc[:, 2:]
 
     # dataset = ScorePairDataset(all_pairs, flight_id_to_paths)
     # dataset = ScorePairDataset(non_zero_pairs, flight_id_to_paths)
