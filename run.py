@@ -174,8 +174,8 @@ def main():
     # flight = flight.iloc[:, 2:]
 
     # dataset = ScorePairDataset(all_pairs, flight_id_to_paths)
-    # dataset = ScorePairDataset(non_zero_pairs, flight_id_to_paths)
-    dataset = TransformationDatasetReverse(flight_id_topath=flight_id_to_paths, reverse_masked=False, reverse_original=False)
+    dataset = ScorePairDataset(non_zero_pairs, flight_id_to_paths)
+    # dataset = TransformationDatasetReverse(flight_id_topath=flight_id_to_paths, reverse_masked=False, reverse_original=False)
 
     visualization_dataset = DefaultIterationDataset(flight_id_topath=flight_id_to_paths)
     # TODO: 0-10, 10-40, 40-100

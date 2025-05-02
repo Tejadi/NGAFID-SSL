@@ -42,9 +42,8 @@ def main(args):
                 continue
         
             flight_data.columns = [col.strip().replace(' ', '').lower() for col in flight_data.columns]
-
             flight_data = flight_data[list(columns_set)]
-            
+
             if drop_length:
                 if len(flight_data) < drop_length:
                     if delete_original:
@@ -63,6 +62,10 @@ def main(args):
                 flight_data = flight_data.fillna(0)
             else:
                 flight_data = flight_data.ffill().bfill() #bfill to fill first row of NA values
+            
+            for col in flight_data.select_dtypes(include='object').columns:
+                flight_data[col] = pd.to_numeric(flight_data[col], errors='coerce')
+
             
             # Save processed file
             output_file = output_path / flight_path.name
