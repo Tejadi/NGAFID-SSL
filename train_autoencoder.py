@@ -61,16 +61,18 @@ def train_autoencoder(
         for batch_idx, (data,) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch+1}/{n_epochs}', leave=False)):
             data = data.to(device)
             
-            # Apply masking to input
-            original_data = data.cpu().numpy()
-            _, masked_data = mask_transform(
-                original_data,
-                masking_ratio=masking_ratio,
-                mean_mask_length=mean_mask_length,
-                mode='separate',
-                distribution='geometric'
-            )
-            masked_data = torch.FloatTensor(masked_data).to(device)
+            original_data = data.cpu().numpy()  # shape: (batch_size, 10000, feature_dim)
+            masked_batch = []
+            for sequence in original_data:
+                _, masked_sequence = mask_transform(
+                    sequence,  # shape: (10000, feature_dim)
+                    masking_ratio=masking_ratio,
+                    mean_mask_length=mean_mask_length,
+                    mode='separate',
+                    distribution='geometric'
+                )
+                masked_batch.append(masked_sequence)
+            masked_data = torch.FloatTensor(np.array(masked_batch)).to(device)  # shape: (batch_size, 10000, feature_dim)
             
             # Forward pass with masked data, but compare against original
             reconstructed = model(masked_data)
@@ -104,7 +106,7 @@ if __name__ == "__main__":
                       help='Learning rate (default: 0.001)')
     parser.add_argument('--masking_ratio', type=float, default=0.6,
                       help='Proportion of input to mask (default: 0.6)')
-    parser.add_argument('--mean_mask_length', type=int, default=3,
+    parser.add_argument('--mean_mask_length', type=int, default=7,
                       help='Average length of masking subsequences (default: 3)')
     args = parser.parse_args()
 
