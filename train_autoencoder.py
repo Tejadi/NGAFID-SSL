@@ -43,8 +43,20 @@ def train_autoencoder(
     device="cuda" if torch.cuda.is_available() else "cpu",
     wandb_run=None
 ):
+    # Compute normalization parameters
+    # We normalize across all flights and timesteps for each feature
+    data_reshaped = train_data.reshape(-1, input_dim)
+    data_mean = np.mean(data_reshaped, axis=0)
+    data_std = np.std(data_reshaped, axis=0)
+    
+    # Avoid division by zero in normalization
+    data_std[data_std == 0] = 1.0
+    
+    # Normalize the data
+    train_data_normalized = (train_data - data_mean) / data_std
+    
     # Convert data to PyTorch dataset
-    train_dataset = TensorDataset(torch.FloatTensor(train_data))
+    train_dataset = TensorDataset(torch.FloatTensor(train_data_normalized))
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     
     # Initialize model
@@ -52,7 +64,6 @@ def train_autoencoder(
     model = model.to(device)
     
     # Define loss function and optimizer
-    # criterion = nn.MSELoss()
     criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
@@ -104,7 +115,13 @@ def train_autoencoder(
                 'avg_loss': avg_loss,
             })
     
-    return model
+    # Save normalization parameters with the model
+    normalization_params = {
+        'mean': data_mean,
+        'std': data_std
+    }
+    
+    return model, normalization_params
 
 if __name__ == "__main__":
     # Parse command line arguments
@@ -156,7 +173,7 @@ if __name__ == "__main__":
         wandb_run = None
     
     # Train the model
-    trained_model = train_autoencoder(
+    trained_model, normalization_params = train_autoencoder(
         train_data=train_data,
         input_dim=input_dim,
         hidden_dim=args.hidden_dim,
@@ -170,6 +187,9 @@ if __name__ == "__main__":
     
     # Save the trained model
     torch.save(trained_model.state_dict(), "trained_autoencoder.pth")
+    
+    # Save normalization parameters
+    np.save("normalization_params.npy", normalization_params)
     
     # Close wandb run if it was used
     if wandb_run is not None:
