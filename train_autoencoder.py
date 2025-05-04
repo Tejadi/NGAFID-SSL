@@ -19,7 +19,7 @@ def load_flight_data(flight_dir):
         raise ValueError(f"No CSV files found in {flight_dir}")
     
     flights = []
-    for path in csv_files[:1000]:
+    for path in tqdm(csv_files, desc='Loading flight data'):
         # Read CSV
         flight = pd.read_csv(path)
         # Convert to numpy array
@@ -52,7 +52,8 @@ def train_autoencoder(
     model = model.to(device)
     
     # Define loss function and optimizer
-    criterion = nn.MSELoss()
+    # criterion = nn.MSELoss()
+    criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
     # Training loop
