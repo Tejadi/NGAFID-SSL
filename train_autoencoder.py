@@ -10,6 +10,7 @@ from pathlib import Path
 import argparse
 from datasets.transformation_dataset import mask_transform
 from tqdm import tqdm
+import wandb
 
 def load_flight_data(flight_dir):
     # Get all CSV files in the directory
@@ -39,7 +40,8 @@ def train_autoencoder(
     learning_rate=1e-3,
     masking_ratio=0.6,
     mean_mask_length=3,
-    device="cuda" if torch.cuda.is_available() else "cpu"
+    device="cuda" if torch.cuda.is_available() else "cpu",
+    wandb_run=None
 ):
     # Convert data to PyTorch dataset
     train_dataset = TensorDataset(torch.FloatTensor(train_data))
@@ -85,9 +87,16 @@ def train_autoencoder(
             
             total_loss += loss.item()
         
-        # Print epoch statistics
+        # Calculate average loss for the epoch
         avg_loss = total_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{n_epochs}], Average Loss: {avg_loss:.6f}")
+        
+        # Log metrics to wandb if enabled
+        if wandb_run is not None:
+            wandb_run.log({
+                'epoch': epoch + 1,
+                'avg_loss': avg_loss,
+            })
     
     return model
 
@@ -108,11 +117,37 @@ if __name__ == "__main__":
                       help='Proportion of input to mask (default: 0.6)')
     parser.add_argument('--mean_mask_length', type=int, default=7,
                       help='Average length of masking subsequences (default: 3)')
+    parser.add_argument('--job_name', type=str, required=True,
+                      help='Name for the wandb run')
+    parser.add_argument('--disable_wandb', action='store_true',
+                      help='Disable Weights & Biases logging')
     args = parser.parse_args()
 
     # Load and prepare data
     train_data = load_flight_data(args.data_dir)
     input_dim = train_data.shape[2]
+    
+    # Initialize wandb if not disabled
+    if not args.disable_wandb:
+        wandb.init(
+            project="ngafid-ssl-fall-24",
+            entity="ngafid-ssl",
+            name=args.job_name,
+            config={
+                'learning_rate': args.learning_rate,
+                'epochs': args.n_epochs,
+                'batch_size': args.batch_size,
+                'hidden_dim': args.hidden_dim,
+                'masking_ratio': args.masking_ratio,
+                'mean_mask_length': args.mean_mask_length,
+                'input_dim': input_dim,
+                'architecture': 'TimeSeriesAutoencoder',
+                'device': "cuda" if torch.cuda.is_available() else "cpu"
+            }
+        )
+        wandb_run = wandb
+    else:
+        wandb_run = None
     
     # Train the model
     trained_model = train_autoencoder(
@@ -123,8 +158,13 @@ if __name__ == "__main__":
         n_epochs=args.n_epochs,
         learning_rate=args.learning_rate,
         masking_ratio=args.masking_ratio,
-        mean_mask_length=args.mean_mask_length
+        mean_mask_length=args.mean_mask_length,
+        wandb_run=wandb_run
     )
     
     # Save the trained model
-    torch.save(trained_model.state_dict(), "trained_autoencoder.pth") 
+    torch.save(trained_model.state_dict(), "trained_autoencoder.pth")
+    
+    # Close wandb run if it was used
+    if wandb_run is not None:
+        wandb.finish() 
