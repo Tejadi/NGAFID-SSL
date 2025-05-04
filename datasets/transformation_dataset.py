@@ -38,9 +38,12 @@ def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats):
             mask = np.ones(X.shape, dtype=bool)
             for m in range(X.shape[1]):  # feature dimension
                 if exclude_feats is None or m not in exclude_feats:
-                    mask[:, m] = geom_noise_mask_single(X.shape[0], lm, masking_ratio)  # time dimension
+                    # Generate mask for each feature independently and reshape to match the time dimension
+                    feature_mask = geom_noise_mask_single(X.shape[0], lm, masking_ratio)
+                    mask[:, m] = feature_mask
         else:  # replicate across feature dimension (mask all variables at the same positions concurrently)
-            mask = np.tile(np.expand_dims(geom_noise_mask_single(X.shape[0], lm, masking_ratio), 1), X.shape[1])
+            time_mask = geom_noise_mask_single(X.shape[0], lm, masking_ratio)
+            mask = np.tile(time_mask[:, np.newaxis], (1, X.shape[1]))
     else:  # each position is independent Bernoulli with p = 1 - masking_ratio
         if mode == 'separate':
             mask = np.random.choice(np.array([True, False]), size=X.shape, replace=True,
