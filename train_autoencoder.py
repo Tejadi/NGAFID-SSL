@@ -19,7 +19,7 @@ def load_flight_data(flight_dir):
         raise ValueError(f"No CSV files found in {flight_dir}")
     
     flights = []
-    for path in csv_files:
+    for path in csv_files[:1000]:
         # Read CSV
         flight = pd.read_csv(path)
         # Convert to numpy array
@@ -73,8 +73,13 @@ def train_autoencoder(
                     mode='separate',
                     distribution='geometric'
                 )
+                # Convert masked sequence back to numpy array with the same shape
+                masked_sequence = masked_sequence.numpy()
                 masked_batch.append(masked_sequence)
-            masked_data = torch.FloatTensor(np.array(masked_batch)).to(device)  # shape: (batch_size, 10000, feature_dim)
+            
+            # Stack the masked sequences - they should all have the same shape now
+            masked_data = np.stack(masked_batch, axis=0)
+            masked_data = torch.FloatTensor(masked_data).to(device)
             
             # Forward pass with masked data, but compare against original
             reconstructed = model(masked_data)
