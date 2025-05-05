@@ -45,6 +45,7 @@ def train_autoencoder(
 ):
     # Compute normalization parameters
     # We normalize across all flights and timesteps for each feature
+    print("Computing normalization parameters...")
     data_reshaped = train_data.reshape(-1, input_dim)
     data_mean = np.mean(data_reshaped, axis=0)
     data_std = np.std(data_reshaped, axis=0)
@@ -54,6 +55,7 @@ def train_autoencoder(
     
     # Normalize the data
     train_data_normalized = (train_data - data_mean) / data_std
+    print("Normalization parameters computed.")
     
     # Convert data to PyTorch dataset
     train_dataset = TensorDataset(torch.FloatTensor(train_data_normalized))
@@ -64,6 +66,7 @@ def train_autoencoder(
     model = model.to(device)
     
     # Define loss function and optimizer
+    # criterion = nn.MSELoss()
     criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     

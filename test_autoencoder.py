@@ -121,6 +121,8 @@ if __name__ == "__main__":
                       help='Directory containing test flight CSV files')
     parser.add_argument('--model_path', type=str, required=True,
                       help='Path to trained model weights')
+    parser.add_argument('--norm_params_path', type=str, required=True,
+                      help='Path to normalization parameters')
     parser.add_argument('--hidden_dim', type=int, default=64,
                       help='Hidden dimension size (default: 64)')
     parser.add_argument('--batch_size', type=int, default=32,
@@ -135,6 +137,9 @@ if __name__ == "__main__":
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
+    # Load normalization parameters
+    normalization_params = np.load(args.norm_params_path, allow_pickle=True).item()
+    
     # Load test data
     test_data = load_flight_data(args.data_dir)
     input_dim = test_data.shape[2]
@@ -147,6 +152,7 @@ if __name__ == "__main__":
     metrics, orig_data, recon_data = evaluate_model(
         model,
         test_data,
+        normalization_params=normalization_params,
         batch_size=args.batch_size,
         masking_ratio=args.masking_ratio,
         mean_mask_length=args.mean_mask_length,
