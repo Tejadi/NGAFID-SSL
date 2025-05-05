@@ -50,7 +50,7 @@ def evaluate_model(model, test_data, normalization_params, batch_size=32, maskin
     all_recon = []
     
     with torch.no_grad():
-        for data, in test_loader:
+        for data, in tqdm(test_loader, desc="Evaluating", unit="batch"):
             data = data.to(device)
             
             # Create masked version
