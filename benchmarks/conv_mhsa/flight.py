@@ -1,0 +1,94 @@
+import torch
+import pandas as pd
+
+from typing import Tuple
+
+INPUT_COLS = ['vspdg',
+              'e1egtdivergence',
+              'crs',
+              'vspdcalculated',
+              'trk',
+              'normac',
+              'altmsl',
+              'vspd',
+              'oat',
+              'hplwas',
+              'baroa',
+              'e1oilp',
+              'ias',
+              'latac',
+              'e1egt1',
+              'densityratio',
+              'e1oilt',
+              'altmsllagdiff',
+              'pitch',
+              'tas',
+              'fqtyr',
+              'totalfuel',
+              'trueairspeed(ft/min)',
+              'hplfd',
+              'magvar',
+              'e1egt2',
+              'altgps',
+              'amp1',
+              'fqtyl',
+              'volt1',
+              'e1fflow',
+              'altagl',
+              'altb',
+              'roll',
+              'stallindex',
+              'e1egt3',
+              'e1rpm',
+              'e1egt4',
+              'hdg',
+              'aoasimple',
+              'gndspd']
+
+AIRCRAFT_CLASS = {
+    'Cessna172S': 0,
+    'PA-44-180': 1,
+    'PA-28-181': 2
+}
+
+CLASS_AIRCRAFT = {v: k for k, v in AIRCRAFT_CLASS.items()}
+
+class Flight:
+    def __init__(self, flight_id: int, filename: str, aircraft_type: str):
+        self.flight_id = flight_id
+        self.filename = filename
+        self.aircraft_type = aircraft_type
+
+    def process(self) -> bool:
+        df = pd.read_csv(self.filename)
+
+        for col in INPUT_COLS:
+            if col not in df.columns:
+                return False
+
+        df = df[INPUT_COLS]
+
+        n_rows = df.shape[0]
+        pad_needed = 4096 - n_rows
+
+        if pad_needed > 0:
+            padding_df = pd.DataFrame(0, index=range(pad_needed), columns=df.columns)
+            self.df = pd.concat([df, padding_df], ignore_index=True)
+        else:
+            self.df = df[:4096]
+
+        self.df = self.df.fillna(0)
+
+        return True
+
+    def get_class(self):
+        return AIRCRAFT_CLASS[self.aircraft_type]
+
+    def get_data(self) -> Tuple[torch.Tensor, float, int]:
+        df_tensor = torch.tensor(self.df.values, dtype=torch.float32)
+
+        acft_class = self.get_class()
+        acft_class = torch.tensor(acft_class, dtype=torch.long)
+        return (df_tensor, acft_class, self.flight_id,)
+
+
