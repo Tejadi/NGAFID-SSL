@@ -47,7 +47,8 @@ python preprocessing/preprocessing.py \
     -pad 10000 \
     -drop 1000 \
     -na zero \
-    -cols preprocessing/default_columns.txt
+    -cols preprocessing/default_columns.txt \
+    --split
 ```
 
 Note: you have to run the file in a parent directory of the input data and the preprocessing script. Argument paths should all be relative to this directory.
