@@ -59,8 +59,12 @@ class Flight:
         self.filename = filename
         self.aircraft_type = aircraft_type
 
-    def process(self) -> bool:
+    def process(self, no_preproc=False) -> bool:
         df = pd.read_csv(self.filename)
+
+        if no_preproc:
+            self.df = df
+            return True
 
         for col in INPUT_COLS:
             if col not in df.columns:

@@ -11,6 +11,8 @@ from tqdm import tqdm
 DATASET_ROOT = '/mnt/crucial/data/ngafid/exports/loci_dataset_fixed_keys_3'
 SPLITS = ['test', 'train', 'val']
 
+DATA_PATH = '/home/aidan/nvm_data/NGAFID-LOCI-Data/preprocessed_data/'
+
 def probabilistic_split():
     r = random.random()
     if r < 0.7:
@@ -54,7 +56,7 @@ def split_flights(db):
 
 
 class GADataset(Dataset):
-    def __init__(self, db: DBInterface, split: str, dataset_id: int = 1):
+    def __init__(self, db: DBInterface, split: str, dataset_id: int | None = None):
         """
         data_tensor: torch.Tensor of shape (N, 4096, 23)
         label_tensor: torch.Tensor of shape (N,) or (N, 1)
@@ -63,7 +65,24 @@ class GADataset(Dataset):
         self.data = []
         self.split = split
 
-        self._load_from_db(dataset_id)
+        if dataset_id is not None:
+            self._load_from_db(dataset_id)
+        else:
+            self._load_from_disk()
+
+    def _load_from_disk(self):
+        path = os.path.join(DATA_PATH, self.split)
+        dir_list = os.listdir(path)
+        pbar = tqdm(dir_list, desc=f"Processing {len(dir_list)} flights for {self.split}", unit="flight")
+        for file in pbar:
+            fname = os.path.basename(file)
+            toks = fname.split('_')
+            aircraft_type = str(''.join(toks[:2])) if toks[0].startswith('C') else str(''.join(toks[:1]))
+            flight_id = int(toks[-1].split('.')[0])
+
+            flight = Flight(flight_id, os.path.join(DATA_PATH, self.split, file), aircraft_type)
+            flight.process(no_preproc=True)
+            self.data.append(flight)
 
     def _load_from_db(self, dataset_id: int):
         flight_info = self.db.aselectn('Dataset_Contents', ['flight_id', 'aircraft_type', 'filename'], fetch_one=False, split=self.split)
@@ -72,7 +91,6 @@ class GADataset(Dataset):
             flight = Flight(fid, fname, acft_type)
             if flight.process():
                 self.data.append(flight)
-
 
     def __len__(self):
         return len(self.data)
@@ -84,7 +102,7 @@ class GADataset(Dataset):
 def main():
     db = DBInterface("sqlite:///benchmarks.db")
 
-    dataset = GADataset(db, 'test', 1)
+    dataset = GADataset(db, 'test')
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
     for x, y, f in loader:

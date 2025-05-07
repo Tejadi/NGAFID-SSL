@@ -105,7 +105,7 @@ class ConvMHSAClassifier(nn.Module):
         else:
             x = x.mean(dim=1)
 
-        return torch.sigmoid(self.final_layer(x))
+        return self.final_layer(x)
 
 
 def main():
