@@ -1,0 +1,27 @@
+name: ngafid-ssl
+
+paths:
+  flight_scores: "NGAFID-LOCI-Data/flight_safety_scores.csv"
+  aircraft_types: "NGAFID-LOCI-Data/aircraft_types.csv"
+  events: "NGAFID-LOCI-Data/events.csv"
+  flight_id_file: "NGAFID-LOCI-Data/flight_ids.csv"
+  fixed_keys_flights: "preprocessed_data"
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pandas
+  - pyyaml
+  - scikit-learn
+  - einops
+  - ipykernel
+  - tqdm
+  - transformers
+  - seaborn
+  - torchaudio
+  - pytorch
+  - torchvision
+
+prefix: /path/to/conda

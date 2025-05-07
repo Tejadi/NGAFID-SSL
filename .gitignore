@@ -1,0 +1,8 @@
+NGAFID-LOCI-Data/
+preprocessed_data/
+preprocessed_data_train/
+preprocessed_data_test/
+preprocessed_data_val/
+__pycache__/
+wandb/
+runs/
