@@ -100,17 +100,22 @@ def evaluate_model(model, test_data, normalization_params, batch_size=32, maskin
     
     return metrics, np.concatenate(all_orig), np.concatenate(all_recon)
 
-def plot_reconstructions(original, reconstructed, feature_idx=0, num_samples=5):
+def plot_reconstructions(original, reconstructed, feature_indices=[0], num_samples=5):
     """
     Plot original vs reconstructed sequences for visual comparison.
     """
-    plt.figure(figsize=(15, 10))
-    for i in range(num_samples):
-        plt.subplot(num_samples, 1, i+1)
-        plt.plot(original[i, :, feature_idx], label='Original', alpha=0.7)
-        plt.plot(reconstructed[i, :, feature_idx], label='Reconstructed', alpha=0.7)
-        plt.title(f'Sample {i+1}, Feature {feature_idx}')
-        plt.legend()
+    num_features = len(feature_indices)
+    num_total_samples = original.shape[0]
+    random_indices = np.random.choice(num_total_samples, num_samples, replace=False)
+    
+    plt.figure(figsize=(15, 5 * num_samples * num_features))
+    for i, idx in enumerate(random_indices):
+        for j, feature_idx in enumerate(feature_indices):
+            plt.subplot(num_samples, num_features, i * num_features + j + 1)
+            plt.plot(original[idx, :, feature_idx], label='Original', alpha=0.7)
+            plt.plot(reconstructed[idx, :, feature_idx], label='Reconstructed', alpha=0.7)
+            plt.title(f'Sample {idx+1}, Feature {feature_idx}')
+            plt.legend()
     plt.tight_layout()
     plt.savefig('reconstruction_comparison.png')
     plt.close()
