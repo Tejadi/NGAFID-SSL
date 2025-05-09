@@ -159,7 +159,7 @@ def train_autoencoder(
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train autoencoder on flight data')
-    parser.add_argument('--data_dir', type=str, required=True,
+    parser.add_argument('--train_data_dir', type=str, required=True,
                       help='Directory containing flight CSV files')
     parser.add_argument('--val_data_dir', type=str, required=True,
                       help='Directory containing validation flight CSV files')
@@ -182,7 +182,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Load and prepare data
-    train_data = load_flight_data(args.data_dir)
+    train_data = load_flight_data(args.train_data_dir)
     val_data = load_flight_data(args.val_data_dir)
     input_dim = train_data.shape[2]
     
