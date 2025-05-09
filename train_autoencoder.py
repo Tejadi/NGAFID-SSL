@@ -33,6 +33,7 @@ def load_flight_data(flight_dir):
 
 def train_autoencoder(
     train_data,
+    val_data,
     input_dim,
     hidden_dim=64,
     batch_size=32,
