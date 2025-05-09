@@ -100,25 +100,24 @@ def evaluate_model(model, test_data, normalization_params, batch_size=32, maskin
     
     return metrics, np.concatenate(all_orig), np.concatenate(all_recon)
 
-def plot_reconstructions(original, reconstructed, feature_indices=[0], num_samples=5):
+def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], num_samples=10):
     """
     Plot original vs reconstructed sequences for visual comparison.
     """
-    num_features = len(feature_indices)
     num_total_samples = original.shape[0]
     random_indices = np.random.choice(num_total_samples, num_samples, replace=False)
     
-    plt.figure(figsize=(15, 5 * num_samples * num_features))
-    for i, idx in enumerate(random_indices):
-        for j, feature_idx in enumerate(feature_indices):
-            plt.subplot(num_samples, num_features, i * num_features + j + 1)
+    for feature_idx in feature_indices:
+        plt.figure(figsize=(15, 5 * num_samples))
+        for i, idx in enumerate(random_indices):
+            plt.subplot(num_samples, 1, i + 1)
             plt.plot(original[idx, :, feature_idx], label='Original', alpha=0.7)
             plt.plot(reconstructed[idx, :, feature_idx], label='Reconstructed', alpha=0.7)
             plt.title(f'Sample {idx+1}, Feature {feature_idx}')
             plt.legend()
-    plt.tight_layout()
-    plt.savefig('reconstruction_comparison.png')
-    plt.close()
+        plt.tight_layout()
+        plt.savefig(f'reconstruction_comparison_feature_{feature_idx}.png')
+        plt.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Test trained autoencoder on flight data')
@@ -173,4 +172,4 @@ if __name__ == "__main__":
     # Plot some reconstructions
     print("\nGenerating reconstruction plots...")
     plot_reconstructions(orig_data, recon_data)
-    print("Plots saved as 'reconstruction_comparison.png'") 
+    print("Plots saved as 'reconstruction_comparison_feature_X.png' for each feature") 

@@ -3,16 +3,18 @@ import pandas as pd
 from torch.utils.data import Dataset
 import numpy as np
 
-def mask_transform(X,masking_ratio=0.6, mean_mask_length=3, mode='separate', distribution='geometric', exclude_feats=None):
-    mask = noise_mask(X, masking_ratio, mean_mask_length, mode, distribution, exclude_feats)  # (seq_length, feat_dim) boolean array
+def mask_transform(X, masking_ratio=0.6, mean_mask_length=3, mode='separate', distribution='geometric', exclude_feats=None, random_seed=None):
+    if random_seed is not None:
+        np.random.seed(random_seed)
+    mask = noise_mask(X, masking_ratio, mean_mask_length, mode, distribution, exclude_feats, random_seed)  # (seq_length, feat_dim) boolean array
     X = torch.from_numpy(X)
     mask = torch.from_numpy(mask)
     transformed_X = X * mask
-    return X,transformed_X
+    return X, transformed_X, mask
 
 # Credit: Adapted from Repo mvts_transformer by Author George Zerveas from: https://github.dev/gzerveas/mvts_transformer
 # Original file: src/datasets/dataset.py, licensed under MIT
-def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats):
+def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats, random_seed=None):
     """
     Creates a random boolean mask of the same shape as X, with 0s at places where a feature should be masked.
     Args:
@@ -26,10 +28,14 @@ def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats):
             sampling follows a markov chain (and thus is stateful), resulting in geometric distributions of
             masked squences of a desired mean length `lm`
         exclude_feats: iterable of indices corresponding to features to be excluded from masking (i.e. to remain all 1s)
+        random_seed: optional random seed for reproducibility
 
     Returns:
         boolean numpy array with the same shape as X, with 0s at places where a feature should be masked
     """
+    if random_seed is not None:
+        np.random.seed(random_seed)
+        
     if exclude_feats is not None:
         exclude_feats = set(exclude_feats)
 
@@ -38,9 +44,9 @@ def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats):
             mask = np.ones(X.shape, dtype=bool)
             for m in range(X.shape[1]):  # feature dimension
                 if exclude_feats is None or m not in exclude_feats:
-                    mask[:, m] = geom_noise_mask_single(X.shape[0], lm, masking_ratio)  # time dimension
+                    mask[:, m] = geom_noise_mask_single(X.shape[0], lm, masking_ratio, random_seed)  # time dimension
         else:  # replicate across feature dimension (mask all variables at the same positions concurrently)
-            mask = np.tile(np.expand_dims(geom_noise_mask_single(X.shape[0], lm, masking_ratio), 1), X.shape[1])
+            mask = np.tile(np.expand_dims(geom_noise_mask_single(X.shape[0], lm, masking_ratio, random_seed), 1), X.shape[1])
     else:  # each position is independent Bernoulli with p = 1 - masking_ratio
         if mode == 'separate':
             mask = np.random.choice(np.array([True, False]), size=X.shape, replace=True,
@@ -52,7 +58,7 @@ def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats):
 
 # Credit: Adapted from Repo mvts_transformer by Author George Zerveas from: https://github.dev/gzerveas/mvts_transformer
 # Original file: src/datasets/dataset.py, licensed under MIT
-def geom_noise_mask_single(L, lm, masking_ratio):
+def geom_noise_mask_single(L, lm, masking_ratio, random_seed=None):
     """
     Randomly create a boolean mask of length `L`, consisting of subsequences of average length lm, masking with 0s a `masking_ratio`
     proportion of the sequence L. The length of masking subsequences and intervals follow a geometric distribution.
@@ -60,10 +66,14 @@ def geom_noise_mask_single(L, lm, masking_ratio):
         L: length of mask and sequence to be masked
         lm: average length of masking subsequences (streaks of 0s)
         masking_ratio: proportion of L to be masked
+        random_seed: optional random seed for reproducibility
 
     Returns:
         (L,) boolean numpy array intended to mask ('drop') with 0s a sequence of length L
     """
+    if random_seed is not None:
+        np.random.seed(random_seed)
+        
     keep_mask = np.ones(L, dtype=bool)
     p_m = 1 / lm  # probability of each masking sequence stopping. parameter of geometric distribution.
     p_u = p_m * masking_ratio / (1 - masking_ratio)  # probability of each unmasked sequence stopping. parameter of geometric distribution.
@@ -78,17 +88,10 @@ def geom_noise_mask_single(L, lm, masking_ratio):
 
     return keep_mask
 
-def noise_transform(X, loc = 0, range = (0.1, 0.5)):
-    # normalize X column wise
-    # denom = X.std(axis=0)
-    # if 0 in denom:
-    #     X_standardized = (X - X.mean(axis=0)) / denom
-    #     deviation = np.random.uniform(range[0], range[1])
-    #     noise = np.random.normal(loc, deviation, X.shape)
-    #     X_transformed = X_standardized + noise
-    #     return X_standardized, X_transformed
-    # else:
-    #     return X, X
+def noise_transform(X, loc=0, range=(0.1, 0.5), random_seed=None):
+    if random_seed is not None:
+        np.random.seed(random_seed)
+        
     mean = X.mean(axis=0)
     std_dev = X.std(axis=0)
     
