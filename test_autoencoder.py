@@ -20,7 +20,7 @@ def load_model(model_path, input_dim, hidden_dim, device):
     model.eval()
     return model
 
-def evaluate_model(model, test_data, normalization_params, batch_size=32, masking_ratio=0.6, mean_mask_length=3,
+def evaluate_model(model, test_data, flight_ids, normalization_params, batch_size=32, masking_ratio=0.6, mean_mask_length=3,
                   device="cuda" if torch.cuda.is_available() else "cpu"):
     """
     Evaluate the autoencoder model on test data.
@@ -28,6 +28,7 @@ def evaluate_model(model, test_data, normalization_params, batch_size=32, maskin
     Args:
         model: The trained autoencoder model
         test_data: Test data to evaluate on
+        flight_ids: List of flight IDs to use as random seeds
         normalization_params: Dictionary containing 'mean' and 'std' for denormalization
         batch_size: Batch size for evaluation
         masking_ratio: Ratio of data to mask
@@ -39,8 +40,8 @@ def evaluate_model(model, test_data, normalization_params, batch_size=32, maskin
     # Normalize test data using saved parameters
     test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
     
-    # Convert to PyTorch dataset
-    test_dataset = TensorDataset(torch.FloatTensor(test_data_normalized))
+    # Convert to PyTorch dataset and create a dataset that includes flight IDs
+    test_dataset = TensorDataset(torch.FloatTensor(test_data_normalized), torch.LongTensor(flight_ids))
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
     total_mae = 0
@@ -50,19 +51,21 @@ def evaluate_model(model, test_data, normalization_params, batch_size=32, maskin
     all_recon = []
     
     with torch.no_grad():
-        for data, in tqdm(test_loader, desc="Evaluating", unit="batch"):
+        for data, batch_ids in tqdm(test_loader, desc="Evaluating", unit="batch"):
             data = data.to(device)
             
             # Create masked version
             original_data = data.cpu().numpy()
             masked_batch = []
-            for sequence in original_data:
-                _, masked_sequence = mask_transform(
+            for sequence, flight_id in zip(original_data, batch_ids):
+                # Use flight_id as the random seed
+                _, masked_sequence, mask = mask_transform(
                     sequence,
                     masking_ratio=masking_ratio,
                     mean_mask_length=mean_mask_length,
                     mode='separate',
-                    distribution='geometric'
+                    distribution='geometric',
+                    random_seed=int(flight_id)
                 )
                 masked_sequence = masked_sequence.numpy()
                 masked_batch.append(masked_sequence)
@@ -145,7 +148,7 @@ if __name__ == "__main__":
     normalization_params = np.load(args.norm_params_path, allow_pickle=True).item()
     
     # Load test data
-    test_data = load_flight_data(args.data_dir)
+    test_data, flight_ids = load_flight_data(args.data_dir)
     input_dim = test_data.shape[2]
     
     # Load model
@@ -156,6 +159,7 @@ if __name__ == "__main__":
     metrics, orig_data, recon_data = evaluate_model(
         model,
         test_data,
+        flight_ids,
         normalization_params=normalization_params,
         batch_size=args.batch_size,
         masking_ratio=args.masking_ratio,

@@ -19,7 +19,14 @@ def load_flight_data(flight_dir):
         raise ValueError(f"No CSV files found in {flight_dir}")
     
     flights = []
+    flight_ids = []
     for path in tqdm(csv_files, desc='Loading flight data'):
+        # Extract flight ID from filename
+        filename = path.name
+        # Find the number between 'flight_' and '.csv'
+        flight_id = int(filename.split('flight_')[1].split('.csv')[0])
+        flight_ids.append(flight_id)
+        
         # Read CSV
         flight = pd.read_csv(path)
         # Convert to numpy array
@@ -29,7 +36,7 @@ def load_flight_data(flight_dir):
     # Stack all flights into a single array
     # This will give you (N, T, F) shape
     flights_array = np.stack(flights, axis=0)
-    return flights_array
+    return flights_array, flight_ids
 
 def train_autoencoder(
     train_data,
@@ -85,7 +92,7 @@ def train_autoencoder(
             original_data = data.cpu().numpy()
             masked_batch = []
             for sequence in original_data:
-                _, masked_sequence = mask_transform(
+                _, masked_sequence, _ = mask_transform(
                     sequence,
                     masking_ratio=masking_ratio,
                     mean_mask_length=mean_mask_length,
@@ -121,7 +128,7 @@ def train_autoencoder(
                 original_data = data.cpu().numpy()
                 masked_batch = []
                 for sequence in original_data:
-                    _, masked_sequence = mask_transform(
+                    _, masked_sequence, _ = mask_transform(
                         sequence,
                         masking_ratio=masking_ratio,
                         mean_mask_length=mean_mask_length,
@@ -184,8 +191,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Load and prepare data
-    train_data = load_flight_data(args.train_data_dir)
-    val_data = load_flight_data(args.val_data_dir)
+    train_data, _ = load_flight_data(args.train_data_dir)
+    val_data, _ = load_flight_data(args.val_data_dir)
     input_dim = train_data.shape[2]
     
     # Initialize wandb if not disabled
