@@ -43,8 +43,7 @@ def train_autoencoder(
     device="cuda" if torch.cuda.is_available() else "cpu",
     wandb_run=None
 ):
-    # Compute normalization parameters
-    # We normalize across all flights and timesteps for each feature
+    # Compute normalization parameters using only training data
     print("Computing normalization parameters...")
     data_reshaped = train_data.reshape(-1, input_dim)
     data_mean = np.mean(data_reshaped, axis=0)
@@ -53,13 +52,16 @@ def train_autoencoder(
     # Avoid division by zero in normalization
     data_std[data_std == 0] = 1.0
     
-    # Normalize the data
+    # Normalize both training and validation data
     train_data_normalized = (train_data - data_mean) / data_std
+    val_data_normalized = (val_data - data_mean) / data_std
     print("Normalization parameters computed.")
     
-    # Convert data to PyTorch dataset
+    # Convert data to PyTorch datasets
     train_dataset = TensorDataset(torch.FloatTensor(train_data_normalized))
+    val_dataset = TensorDataset(torch.FloatTensor(val_data_normalized))
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
     # Initialize model
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
@@ -72,50 +74,78 @@ def train_autoencoder(
     
     # Training loop
     for epoch in tqdm(range(n_epochs), desc='Training epochs'):
+        # Training phase
         model.train()
-        total_loss = 0
+        total_train_loss = 0
         
         for batch_idx, (data,) in enumerate(tqdm(train_loader, desc=f'Epoch {epoch+1}/{n_epochs}', leave=False)):
             data = data.to(device)
             
-            original_data = data.cpu().numpy()  # shape: (batch_size, 10000, feature_dim)
+            original_data = data.cpu().numpy()
             masked_batch = []
             for sequence in original_data:
                 _, masked_sequence = mask_transform(
-                    sequence,  # shape: (10000, feature_dim)
+                    sequence,
                     masking_ratio=masking_ratio,
                     mean_mask_length=mean_mask_length,
                     mode='separate',
                     distribution='geometric'
                 )
-                # Convert masked sequence back to numpy array with the same shape
                 masked_sequence = masked_sequence.numpy()
                 masked_batch.append(masked_sequence)
             
-            # Stack the masked sequences - they should all have the same shape now
             masked_data = np.stack(masked_batch, axis=0)
             masked_data = torch.FloatTensor(masked_data).to(device)
             
-            # Forward pass with masked data, but compare against original
             reconstructed = model(masked_data)
             loss = criterion(reconstructed, data)
             
-            # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            total_loss += loss.item()
+            total_train_loss += loss.item()
         
-        # Calculate average loss for the epoch
-        avg_loss = total_loss / len(train_loader)
-        print(f"Epoch [{epoch+1}/{n_epochs}], Average Loss: {avg_loss:.6f}")
+        avg_train_loss = total_train_loss / len(train_loader)
+        
+        # Validation phase
+        model.eval()
+        total_val_loss = 0
+        
+        with torch.no_grad():
+            for batch_idx, (data,) in enumerate(val_loader):
+                data = data.to(device)
+                
+                original_data = data.cpu().numpy()
+                masked_batch = []
+                for sequence in original_data:
+                    _, masked_sequence = mask_transform(
+                        sequence,
+                        masking_ratio=masking_ratio,
+                        mean_mask_length=mean_mask_length,
+                        mode='separate',
+                        distribution='geometric'
+                    )
+                    masked_sequence = masked_sequence.numpy()
+                    masked_batch.append(masked_sequence)
+                
+                masked_data = np.stack(masked_batch, axis=0)
+                masked_data = torch.FloatTensor(masked_data).to(device)
+                
+                reconstructed = model(masked_data)
+                val_loss = criterion(reconstructed, data)
+                total_val_loss += val_loss.item()
+        
+        avg_val_loss = total_val_loss / len(val_loader)
+        
+        print(f"Epoch [{epoch+1}/{n_epochs}], Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
         
         # Log metrics to wandb if enabled
         if wandb_run is not None:
             wandb_run.log({
                 'epoch': epoch + 1,
-                'avg_loss': avg_loss,
+                'train_loss': avg_train_loss,
+                'val_loss': avg_val_loss,
             })
     
     # Save normalization parameters with the model
@@ -131,6 +161,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train autoencoder on flight data')
     parser.add_argument('--data_dir', type=str, required=True,
                       help='Directory containing flight CSV files')
+    parser.add_argument('--val_data_dir', type=str, required=True,
+                      help='Directory containing validation flight CSV files')
     parser.add_argument('--hidden_dim', type=int, default=64,
                       help='Hidden dimension size (default: 64)')
     parser.add_argument('--batch_size', type=int, default=32,
@@ -151,6 +183,7 @@ if __name__ == "__main__":
 
     # Load and prepare data
     train_data = load_flight_data(args.data_dir)
+    val_data = load_flight_data(args.val_data_dir)
     input_dim = train_data.shape[2]
     
     # Initialize wandb if not disabled
@@ -168,7 +201,9 @@ if __name__ == "__main__":
                 'mean_mask_length': args.mean_mask_length,
                 'input_dim': input_dim,
                 'architecture': 'TimeSeriesAutoencoder',
-                'device': "cuda" if torch.cuda.is_available() else "cpu"
+                'device': "cuda" if torch.cuda.is_available() else "cpu",
+                'train_data_size': len(train_data),
+                'val_data_size': len(val_data)
             }
         )
         wandb_run = wandb
@@ -178,6 +213,7 @@ if __name__ == "__main__":
     # Train the model
     trained_model, normalization_params = train_autoencoder(
         train_data=train_data,
+        val_data=val_data,
         input_dim=input_dim,
         hidden_dim=args.hidden_dim,
         batch_size=args.batch_size,
