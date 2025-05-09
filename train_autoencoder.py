@@ -69,8 +69,8 @@ def train_autoencoder(
     model = model.to(device)
     
     # Define loss function and optimizer
-    # criterion = nn.MSELoss()
-    criterion = nn.L1Loss()
+    criterion = nn.MSELoss()
+    # criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
     # Training loop
@@ -112,7 +112,8 @@ def train_autoencoder(
         # Validation phase
         model.eval()
         total_val_loss = 0
-        
+
+        print("Validating...")
         with torch.no_grad():
             for batch_idx, (data,) in enumerate(val_loader):
                 data = data.to(device)

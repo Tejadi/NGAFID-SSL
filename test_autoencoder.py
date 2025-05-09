@@ -100,7 +100,7 @@ def evaluate_model(model, test_data, normalization_params, batch_size=32, maskin
     
     return metrics, np.concatenate(all_orig), np.concatenate(all_recon)
 
-def plot_reconstructions(original, reconstructed, feature_indices=[3, 7, 10], num_samples=5):
+def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], num_samples=10):
     """
     Plot original vs reconstructed sequences for visual comparison.
     """
