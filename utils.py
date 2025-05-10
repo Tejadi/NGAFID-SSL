@@ -5,7 +5,14 @@ import torch
 import yaml
 
 from pathlib import Path
-
+from tqdm import tqdm
+import numpy as np
+import pandas as pd
+from autoencoder import TimeSeriesAutoencoder
+from count_aircraft_types import count_aircraft_types
+import matplotlib.pyplot as plt
+import seaborn as sns
+import random
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
@@ -49,3 +56,187 @@ def load_config():
         config['paths'][key] = str(base_dir / path)
     
     return config
+
+def load_flight_data(flight_dir):
+    # Get all CSV files in the directory
+    csv_files = list(Path(flight_dir).glob('*.csv'))
+    if not csv_files:
+        raise ValueError(f"No CSV files found in {flight_dir}")
+    
+    flights = []
+    flight_ids = []
+    for path in tqdm(csv_files, desc='Loading flight data'):
+        # Extract flight ID from filename
+        filename = path.name
+        # Find the number between 'flight_' and '.csv'
+        flight_id = int(filename.split('flight_')[1].split('.csv')[0])
+        flight_ids.append(flight_id)
+        
+        # Read CSV
+        flight = pd.read_csv(path)
+        # Convert to numpy array
+        flight_array = flight.values
+        flights.append(flight_array)
+    
+    # Stack all flights into a single array
+    # This will give you (N, T, F) shape
+    flights_array = np.stack(flights, axis=0)
+    return flights_array, flight_ids
+
+def load_model(model_path, input_dim, hidden_dim, device):
+    """
+    Load a trained autoencoder model.
+    """
+    model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model = model.to(device)
+    model.eval()
+    return model
+
+def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], num_samples=10):
+    """
+    Plot original vs reconstructed sequences for visual comparison using seaborn.
+    """
+    # Set the seaborn style
+    sns.set_theme(style="whitegrid")
+    sns.set_palette("husl")
+    
+    num_total_samples = original.shape[0]
+    random_indices = np.random.choice(num_total_samples, num_samples, replace=False)
+    
+    for feature_idx in feature_indices:
+        fig = plt.figure(figsize=(15, 5 * num_samples))
+        for i, idx in enumerate(random_indices):
+            plt.subplot(num_samples, 1, i + 1)
+            
+            # Create a DataFrame for better seaborn plotting
+            time_steps = np.arange(original.shape[1])
+            data_orig = {'Time Step': time_steps, 
+                        'Value': original[idx, :, feature_idx],
+                        'Type': ['Original'] * len(time_steps)}
+            data_recon = {'Time Step': time_steps, 
+                         'Value': reconstructed[idx, :, feature_idx],
+                         'Type': ['Reconstructed'] * len(time_steps)}
+            
+            # Plot using seaborn
+            sns.lineplot(data=data_orig, x='Time Step', y='Value', label='Original', 
+                        alpha=0.7, linewidth=2)
+            sns.lineplot(data=data_recon, x='Time Step', y='Value', label='Reconstructed',
+                        alpha=0.7, linewidth=2)
+            
+            plt.title(f'Sample {idx+1}, Feature {feature_idx}', pad=20, fontsize=12)
+            plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left')
+        
+        # Adjust layout to prevent overlap
+        plt.tight_layout()
+        plt.savefig(f'reconstruction_comparison_feature_{feature_idx}.png', 
+                   bbox_inches='tight', dpi=300)
+        plt.close()
+
+def get_aircraft_counts(data_dir):
+    """
+    Get the counts of each aircraft type from the data directory.
+    Returns a list of counts in order of appearance.
+    """
+    aircraft_counter, _ = count_aircraft_types(data_dir)
+    # Convert counter to list of counts in order of appearance
+    return [count for _, count in sorted(aircraft_counter.items())]
+
+def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=None, feature_indices=[32, 33, 34], flight_ids=None, masking_ratio=0.6, mean_mask_length=3):
+    """
+    Plot original vs reconstructed sequences for different aircraft types side by side.
+    
+    Args:
+        original: Original data array (num_samples, timesteps, features)
+        reconstructed: Reconstructed data array (num_samples, timesteps, features)
+        aircraft_type_counts: List where each element represents count of each aircraft type in order.
+                            If None, defaults to [600, 297, 107]
+        feature_indices: List of feature indices to plot
+        flight_ids: List of flight IDs to use for recreating masks
+        masking_ratio: Ratio of data to mask
+        mean_mask_length: Mean length of masked sequences
+    """
+    if aircraft_type_counts is None:
+        aircraft_type_counts = [600, 297, 107]
+        
+    # Set the style without grid
+    plt.style.use('seaborn-v0_8')  # Use seaborn's base style for better aesthetics
+    sns.set_style("white")  # Clean white background
+    plt.rcParams['axes.grid'] = False  # Explicitly disable grid
+    sns.set_palette("husl")
+    
+    # Calculate starting indices for each aircraft type
+    start_indices = [0]
+    for count in aircraft_type_counts[:-1]:
+        start_indices.append(start_indices[-1] + count)
+    
+    # For each aircraft type, randomly select one sample
+    selected_indices = []
+    for i, count in enumerate(aircraft_type_counts):
+        if count > 0:
+            selected_indices.append(random.randint(start_indices[i], start_indices[i] + count - 1))
+    
+    # Print aircraft types in order
+    print("\nAircraft types from left to right in plots:")
+    for i in range(len(selected_indices)):
+        print(f"Position {i+1}: Aircraft Type {i+1}")
+    print()  # Add blank line after output
+    
+    # Import mask_transform here to avoid circular import
+    from datasets.transformation_dataset import mask_transform
+    
+    # Create plots for each feature
+    for feature_idx in feature_indices:
+        fig = plt.figure(figsize=(15, 5))
+        
+        # Plot original and reconstructed data for each aircraft type
+        for i, idx in enumerate(selected_indices):
+            plt.subplot(1, len(selected_indices), i + 1)
+            time_steps = np.arange(original.shape[1])
+            
+            # Plot original data
+            plt.plot(time_steps, original[idx, :, feature_idx], 
+                    alpha=0.7, linewidth=2, label='Original')
+            
+            # Plot reconstructed data
+            plt.plot(time_steps, reconstructed[idx, :, feature_idx], 
+                    alpha=0.7, linewidth=2, linestyle='--', label='Reconstructed')
+            
+            # If flight_ids are provided, recreate and show the mask
+            if flight_ids is not None:
+                # Get the mask for this sequence
+                flight_id = flight_ids[idx]
+                sequence = original[idx]
+                _, _, mask = mask_transform(
+                    sequence,
+                    masking_ratio=masking_ratio,
+                    mean_mask_length=mean_mask_length,
+                    mode='separate',
+                    distribution='geometric',
+                    random_seed=int(flight_id)
+                )
+                
+                # Extract mask for the current feature
+                feature_mask = mask[:, feature_idx].numpy()
+                
+                # Create shaded regions for masked areas
+                mask_start = None
+                for t in range(len(feature_mask)):
+                    if not feature_mask[t] and mask_start is None:
+                        mask_start = t
+                    elif feature_mask[t] and mask_start is not None:
+                        plt.axvspan(mask_start, t, color='gray', alpha=0.2)
+                        mask_start = None
+                # Handle case where mask extends to the end
+                if mask_start is not None:
+                    plt.axvspan(mask_start, len(feature_mask), color='gray', alpha=0.2)
+            
+            plt.xlabel('Time Step')
+            plt.ylabel('Value')
+            plt.legend()
+        
+        # Adjust layout and save
+        plt.tight_layout()
+        plt.savefig(f'aircraft_comparison_feature_{feature_idx}.png', 
+                   bbox_inches='tight', dpi=300)
+        plt.close()
