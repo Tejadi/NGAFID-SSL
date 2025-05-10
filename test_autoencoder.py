@@ -10,13 +10,15 @@ from train_autoencoder import load_flight_data
 import argparse
 from pathlib import Path
 from tqdm import tqdm
+import random
+from count_aircraft_types import count_aircraft_types
 
 def load_model(model_path, input_dim, hidden_dim, device):
     """
     Load a trained autoencoder model.
     """
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
-    model.load_state_dict(torch.load(model_path))
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model = model.to(device)
     model.eval()
     return model
@@ -144,6 +146,80 @@ def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], 
                    bbox_inches='tight', dpi=300)
         plt.close()
 
+def get_aircraft_counts(data_dir):
+    """
+    Get the counts of each aircraft type from the data directory.
+    Returns a list of counts in order of appearance.
+    """
+    aircraft_counter, _ = count_aircraft_types(data_dir)
+    # Convert counter to list of counts in order of appearance
+    return [count for _, count in sorted(aircraft_counter.items())]
+
+def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=None, feature_indices=[32, 33, 34]):
+    """
+    Plot original vs reconstructed sequences for different aircraft types side by side.
+    
+    Args:
+        original: Original data array (num_samples, timesteps, features)
+        reconstructed: Reconstructed data array (num_samples, timesteps, features)
+        aircraft_type_counts: List where each element represents count of each aircraft type in order.
+                            If None, defaults to [600, 297, 107]
+        feature_indices: List of feature indices to plot
+    """
+    if aircraft_type_counts is None:
+        aircraft_type_counts = [600, 297, 107]
+        
+    # Set the seaborn style
+    sns.set_theme(style="whitegrid")
+    sns.set_palette("husl")
+    
+    # Calculate starting indices for each aircraft type
+    start_indices = [0]
+    for count in aircraft_type_counts[:-1]:
+        start_indices.append(start_indices[-1] + count)
+    
+    # For each aircraft type, randomly select one sample
+    selected_indices = []
+    for i, count in enumerate(aircraft_type_counts):
+        if count > 0:
+            selected_indices.append(random.randint(start_indices[i], start_indices[i] + count - 1))
+    
+    # Create plots for each feature
+    for feature_idx in feature_indices:
+        fig = plt.figure(figsize=(15, 10))
+        
+        # Plot original and reconstructed data for each aircraft type
+        for i, idx in enumerate(selected_indices):
+            # Original data
+            plt.subplot(2, len(selected_indices), i + 1)
+            time_steps = np.arange(original.shape[1])
+            plt.plot(time_steps, original[idx, :, feature_idx], 
+                    label='Original', alpha=0.7, linewidth=2)
+            plt.plot(time_steps, reconstructed[idx, :, feature_idx], 
+                    label='Reconstructed', alpha=0.7, linewidth=2, linestyle='--')
+            plt.title(f'Aircraft Type {i+1}\nFeature {feature_idx} - Original vs Reconstructed')
+            plt.xlabel('Time Step')
+            plt.ylabel('Value')
+            plt.legend()
+            
+            # Overlay comparison
+            plt.subplot(2, 1, 2)
+            plt.plot(time_steps, original[idx, :, feature_idx], 
+                    label=f'Aircraft {i+1} Original', alpha=0.7, linewidth=2)
+            plt.plot(time_steps, reconstructed[idx, :, feature_idx], 
+                    label=f'Aircraft {i+1} Reconstructed', alpha=0.7, linewidth=2, linestyle='--')
+        
+        plt.title(f'Feature {feature_idx} - All Aircraft Types Comparison')
+        plt.xlabel('Time Step')
+        plt.ylabel('Value')
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # Adjust layout and save
+        plt.tight_layout()
+        plt.savefig(f'aircraft_comparison_feature_{feature_idx}.png', 
+                   bbox_inches='tight', dpi=300)
+        plt.close()
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Test trained autoencoder on flight data')
     parser.add_argument('--data_dir', type=str, required=True,
@@ -162,6 +238,11 @@ if __name__ == "__main__":
                       help='Average length of masking subsequences (default: 3)')
     
     args = parser.parse_args()
+    
+    # Get aircraft counts from the data directory
+    print("Analyzing aircraft types in the data directory...")
+    aircraft_counts = get_aircraft_counts(args.data_dir)
+    print(f"Found aircraft counts: {aircraft_counts}")
     
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -195,7 +276,12 @@ if __name__ == "__main__":
     print(f"MSE: {metrics['mse']:.6f}")
     print(f"RMSE: {metrics['rmse']:.6f}")
     
-    # Plot some reconstructions
-    print("\nGenerating reconstruction plots...")
-    plot_reconstructions(orig_data, recon_data)
-    print("Plots saved as 'reconstruction_comparison_feature_X.png' for each feature") 
+    # Plot reconstructions with aircraft type comparison
+    print("\nGenerating aircraft type comparison plots...")
+    plot_aircraft_type_comparison(orig_data, recon_data, aircraft_counts)
+    print("Aircraft type comparison plots saved as 'aircraft_comparison_feature_X.png' for each feature")
+    
+    # Original reconstruction plots
+    # print("\nGenerating general reconstruction plots...")
+    # plot_reconstructions(orig_data, recon_data)
+    # print("General reconstruction plots saved as 'reconstruction_comparison_feature_X.png' for each feature") 
