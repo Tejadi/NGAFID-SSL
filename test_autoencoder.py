@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from torch.utils.data import DataLoader, TensorDataset
 from autoencoder import TimeSeriesAutoencoder
 from datasets.transformation_dataset import mask_transform
@@ -105,21 +106,42 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
 
 def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], num_samples=10):
     """
-    Plot original vs reconstructed sequences for visual comparison.
+    Plot original vs reconstructed sequences for visual comparison using seaborn.
     """
+    # Set the seaborn style
+    sns.set_theme(style="whitegrid")
+    sns.set_palette("husl")
+    
     num_total_samples = original.shape[0]
     random_indices = np.random.choice(num_total_samples, num_samples, replace=False)
     
     for feature_idx in feature_indices:
-        plt.figure(figsize=(15, 5 * num_samples))
+        fig = plt.figure(figsize=(15, 5 * num_samples))
         for i, idx in enumerate(random_indices):
             plt.subplot(num_samples, 1, i + 1)
-            plt.plot(original[idx, :, feature_idx], label='Original', alpha=0.7)
-            plt.plot(reconstructed[idx, :, feature_idx], label='Reconstructed', alpha=0.7)
-            plt.title(f'Sample {idx+1}, Feature {feature_idx}')
-            plt.legend()
+            
+            # Create a DataFrame for better seaborn plotting
+            time_steps = np.arange(original.shape[1])
+            data_orig = {'Time Step': time_steps, 
+                        'Value': original[idx, :, feature_idx],
+                        'Type': ['Original'] * len(time_steps)}
+            data_recon = {'Time Step': time_steps, 
+                         'Value': reconstructed[idx, :, feature_idx],
+                         'Type': ['Reconstructed'] * len(time_steps)}
+            
+            # Plot using seaborn
+            sns.lineplot(data=data_orig, x='Time Step', y='Value', label='Original', 
+                        alpha=0.7, linewidth=2)
+            sns.lineplot(data=data_recon, x='Time Step', y='Value', label='Reconstructed',
+                        alpha=0.7, linewidth=2)
+            
+            plt.title(f'Sample {idx+1}, Feature {feature_idx}', pad=20, fontsize=12)
+            plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left')
+        
+        # Adjust layout to prevent overlap
         plt.tight_layout()
-        plt.savefig(f'reconstruction_comparison_feature_{feature_idx}.png')
+        plt.savefig(f'reconstruction_comparison_feature_{feature_idx}.png', 
+                   bbox_inches='tight', dpi=300)
         plt.close()
 
 if __name__ == "__main__":

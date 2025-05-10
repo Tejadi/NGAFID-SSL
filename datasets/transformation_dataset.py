@@ -159,8 +159,6 @@ class TransformationDatasetReverse(Dataset):
         if self.reverse_original:
             flight = torch.flip(flight, dims=[0])
 
-        # print(flight.shape, flight_transformed.shape)
-
     
 
         pos_pair = (flight.unsqueeze(dim=0), flight_transformed.unsqueeze(dim=0))
