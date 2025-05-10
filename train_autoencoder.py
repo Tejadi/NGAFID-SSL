@@ -11,32 +11,7 @@ import argparse
 from datasets.transformation_dataset import mask_transform
 from tqdm import tqdm
 import wandb
-
-def load_flight_data(flight_dir):
-    # Get all CSV files in the directory
-    csv_files = list(Path(flight_dir).glob('*.csv'))
-    if not csv_files:
-        raise ValueError(f"No CSV files found in {flight_dir}")
-    
-    flights = []
-    flight_ids = []
-    for path in tqdm(csv_files, desc='Loading flight data'):
-        # Extract flight ID from filename
-        filename = path.name
-        # Find the number between 'flight_' and '.csv'
-        flight_id = int(filename.split('flight_')[1].split('.csv')[0])
-        flight_ids.append(flight_id)
-        
-        # Read CSV
-        flight = pd.read_csv(path)
-        # Convert to numpy array
-        flight_array = flight.values
-        flights.append(flight_array)
-    
-    # Stack all flights into a single array
-    # This will give you (N, T, F) shape
-    flights_array = np.stack(flights, axis=0)
-    return flights_array, flight_ids
+from utils import load_flight_data
 
 def train_autoencoder(
     train_data,
