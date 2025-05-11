@@ -210,7 +210,7 @@ def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=
                     color=reconstructed_color)
             
             plt.xlabel('Time Step')
-            plt.ylabel('Value')
+            plt.ylabel('Pitch Angle (deg)')
             plt.legend()
             
             # Improve x-axis readability
