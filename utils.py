@@ -97,9 +97,14 @@ def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], 
     """
     Plot original vs reconstructed sequences for visual comparison using seaborn.
     """
-    # Set the seaborn style
+    # Set the seaborn style with improved grid settings
     sns.set_theme(style="whitegrid")
-    sns.set_palette("husl")
+    plt.rcParams['grid.color'] = '#E5E5E5'
+    plt.rcParams['grid.alpha'] = 0.5
+    
+    # Define contrasting colors
+    original_color = '#2E86C1'  # Strong blue
+    reconstructed_color = '#E74C3C'  # Strong red
     
     num_total_samples = original.shape[0]
     random_indices = np.random.choice(num_total_samples, num_samples, replace=False)
@@ -118,14 +123,17 @@ def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], 
                          'Value': reconstructed[idx, :, feature_idx],
                          'Type': ['Reconstructed'] * len(time_steps)}
             
-            # Plot using seaborn
+            # Plot using seaborn with specific colors
             sns.lineplot(data=data_orig, x='Time Step', y='Value', label='Original', 
-                        alpha=0.7, linewidth=2)
+                        alpha=0.8, linewidth=2, color=original_color)
             sns.lineplot(data=data_recon, x='Time Step', y='Value', label='Reconstructed',
-                        alpha=0.7, linewidth=2)
+                        alpha=0.8, linewidth=2, color=reconstructed_color)
             
             plt.title(f'Sample {idx+1}, Feature {feature_idx}', pad=20, fontsize=12)
             plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left')
+            
+            # Ensure grid is visible with custom settings
+            plt.grid(True, color='#E5E5E5', alpha=0.5)
         
         # Adjust layout to prevent overlap
         plt.tight_layout()
@@ -142,7 +150,7 @@ def get_aircraft_counts(data_dir):
     # Convert counter to list of counts in order of appearance
     return [count for _, count in sorted(aircraft_counter.items())]
 
-def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=None, feature_indices=[32, 33, 34], flight_ids=None, masking_ratio=0.6, mean_mask_length=3):
+def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=None, feature_indices=[34]):
     """
     Plot original vs reconstructed sequences for different aircraft types side by side.
     
@@ -152,18 +160,18 @@ def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=
         aircraft_type_counts: List where each element represents count of each aircraft type in order.
                             If None, defaults to [600, 297, 107]
         feature_indices: List of feature indices to plot
-        flight_ids: List of flight IDs to use for recreating masks
-        masking_ratio: Ratio of data to mask
-        mean_mask_length: Mean length of masked sequences
     """
     if aircraft_type_counts is None:
         aircraft_type_counts = [600, 297, 107]
         
-    # Set the style without grid
-    plt.style.use('seaborn-v0_8')  # Use seaborn's base style for better aesthetics
-    sns.set_style("white")  # Clean white background
-    plt.rcParams['axes.grid'] = False  # Explicitly disable grid
-    sns.set_palette("husl")
+    # Set the style with improved grid settings
+    sns.set_theme(style="whitegrid")
+    plt.rcParams['grid.color'] = '#E5E5E5'
+    plt.rcParams['grid.alpha'] = 0.5
+    
+    # Define contrasting colors
+    original_color = '#2E86C1'  # Strong blue
+    reconstructed_color = '#E74C3C'  # Strong red
     
     # Calculate starting indices for each aircraft type
     start_indices = [0]
@@ -180,63 +188,41 @@ def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=
     print("\nAircraft types from left to right in plots:")
     for i in range(len(selected_indices)):
         print(f"Position {i+1}: Aircraft Type {i+1}")
-    print()  # Add blank line after output
-    
-    # Import mask_transform here to avoid circular import
-    from datasets.transformation_dataset import mask_transform
+    print()
     
     # Create plots for each feature
     for feature_idx in feature_indices:
-        fig = plt.figure(figsize=(15, 5))
+        # Make the figure wider and slightly taller
+        fig = plt.figure(figsize=(20, 6))
         
         # Plot original and reconstructed data for each aircraft type
         for i, idx in enumerate(selected_indices):
-            plt.subplot(1, len(selected_indices), i + 1)
+            ax = plt.subplot(1, len(selected_indices), i + 1)
             time_steps = np.arange(original.shape[1])
             
-            # Plot original data
+            # Plot original data with specific color
             plt.plot(time_steps, original[idx, :, feature_idx], 
-                    alpha=0.7, linewidth=2, label='Original')
+                    alpha=0.8, linewidth=2, label='Original', color=original_color)
             
-            # Plot reconstructed data
+            # Plot reconstructed data with specific color
             plt.plot(time_steps, reconstructed[idx, :, feature_idx], 
-                    alpha=0.7, linewidth=2, linestyle='--', label='Reconstructed')
-            
-            # If flight_ids are provided, recreate and show the mask
-            if flight_ids is not None:
-                # Get the mask for this sequence
-                flight_id = flight_ids[idx]
-                sequence = original[idx]
-                _, _, mask = mask_transform(
-                    sequence,
-                    masking_ratio=masking_ratio,
-                    mean_mask_length=mean_mask_length,
-                    mode='separate',
-                    distribution='geometric',
-                    random_seed=int(flight_id)
-                )
-                
-                # Extract mask for the current feature
-                feature_mask = mask[:, feature_idx].numpy()
-                
-                # Create shaded regions for masked areas
-                mask_start = None
-                for t in range(len(feature_mask)):
-                    if not feature_mask[t] and mask_start is None:
-                        mask_start = t
-                    elif feature_mask[t] and mask_start is not None:
-                        plt.axvspan(mask_start, t, color='gray', alpha=0.2)
-                        mask_start = None
-                # Handle case where mask extends to the end
-                if mask_start is not None:
-                    plt.axvspan(mask_start, len(feature_mask), color='gray', alpha=0.2)
+                    alpha=0.8, linewidth=2, linestyle='--', label='Reconstructed', 
+                    color=reconstructed_color)
             
             plt.xlabel('Time Step')
             plt.ylabel('Value')
             plt.legend()
+            
+            # Improve x-axis readability
+            ax.tick_params(axis='x', labelsize=10)
+            # Add more x-axis ticks
+            plt.xticks(np.arange(0, len(time_steps), len(time_steps)//10))
+            
+            # Ensure grid is visible with custom settings
+            ax.grid(True, color='#E5E5E5', alpha=0.5)
         
-        # Adjust layout and save
-        plt.tight_layout()
+        # Adjust layout with more width between subplots
+        plt.tight_layout(w_pad=3.0)
         plt.savefig(f'aircraft_comparison_feature_{feature_idx}.png', 
                    bbox_inches='tight', dpi=300)
         plt.close()

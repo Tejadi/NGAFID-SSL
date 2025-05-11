@@ -148,8 +148,7 @@ if __name__ == "__main__":
     
     # Plot reconstructions with aircraft type comparison
     print("\nGenerating aircraft type comparison plots...")
-    plot_aircraft_type_comparison(orig_data, recon_data, aircraft_counts, flight_ids=flight_ids,
-                                masking_ratio=args.masking_ratio, mean_mask_length=args.mean_mask_length)
+    plot_aircraft_type_comparison(orig_data, recon_data, aircraft_counts)
     print("Aircraft type comparison plots saved as 'aircraft_comparison_feature_X.png' for each feature")
     
     # Original reconstruction plots
