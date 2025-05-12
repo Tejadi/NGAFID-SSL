@@ -226,3 +226,18 @@ def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=
         plt.savefig(f'aircraft_comparison_feature_{feature_idx}.png', 
                    bbox_inches='tight', dpi=300)
         plt.close()
+
+def load_sequence_lengths(csv_path):
+    """
+    Load sequence lengths from a CSV file and create a mapping dictionary.
+    
+    Args:
+        csv_path (str): Path to CSV file containing flight_id to sequence_length mapping
+        
+    Returns:
+        dict: Dictionary mapping flight_id to sequence_length
+    """
+    df = pd.read_csv(csv_path)
+    # Assuming CSV has columns 'flight_id' and 'sequence_length'
+    sequence_length_map = dict(zip(df['flight_id'], df['sequence_length']))
+    return sequence_length_map

@@ -3,6 +3,35 @@ import pandas as pd
 from torch.utils.data import Dataset
 import numpy as np
 
+def sequential_mask_transform(X, starting_point, n, sequence_length=None):
+    """
+    Creates a mask that masks all columns for a sequential range of rows.
+    
+    Args:
+        X: (seq_length, feat_dim) numpy array of features
+        starting_point: float between 0 and 1, determines where masking starts
+        n: integer specifying desired padding length
+    
+    Returns:
+        Original X, transformed X (with masking), and the mask
+    """
+    if sequence_length is None:
+        sequence_length = X.shape[0]
+    start_idx = int(sequence_length * starting_point)
+    pad_to = min(sequence_length, start_idx + n)
+    
+    # Create a mask of ones
+    mask = np.ones_like(X, dtype=bool)
+    
+    # Set the mask to False (0) for the specified range across all columns
+    mask[start_idx:pad_to, :] = False
+    
+    X = torch.from_numpy(X)
+    mask = torch.from_numpy(mask)
+    transformed_X = X * mask
+    
+    return X, transformed_X, mask
+
 def mask_transform(X, masking_ratio=0.6, mean_mask_length=3, mode='separate', distribution='geometric', exclude_feats=None, random_seed=None):
     if random_seed is not None:
         np.random.seed(random_seed)
