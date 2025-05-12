@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from datasets.transformation_dataset import mask_transform, sequential_mask_transform
 import argparse
 from tqdm import tqdm
-from utils import load_model, load_flight_data, plot_aircraft_type_comparison, plot_reconstructions, get_aircraft_counts, load_sequence_lengths
+from utils import load_model, load_flight_data, plot_aircraft_type_comparison, plot_reconstructions, get_aircraft_counts, load_sequence_lengths, plot_sequential_reconstructions
 
 def evaluate_model(model, test_data, flight_ids, normalization_params, batch_size=32, masking_ratio=0.6, mean_mask_length=3,
                   device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -264,11 +264,23 @@ if __name__ == "__main__":
     print(f"MSE: {metrics['mse']:.6f}")
     print(f"RMSE: {metrics['rmse']:.6f}")
     
-    # Plot reconstructions with aircraft type comparison
-    print("\nGenerating aircraft type comparison plots...")
-    plot_aircraft_type_comparison(orig_data, recon_data, aircraft_counts, masks)
-    print("Aircraft type comparison plots saved as 'aircraft_comparison_feature_X.png' for each feature")
-    
+    # Plot reconstructions
+    print("\nGenerating reconstruction plots...")
+    if args.use_sequential:
+        plot_sequential_reconstructions(
+            orig_data, 
+            recon_data, 
+            flight_ids,
+            feature_indices=[34],  # You can modify this list to plot different features
+            start_point=args.start_point,
+            mask_length=args.mask_length,
+            sequence_length_csv=args.sequence_length_csv,
+            num_samples=5
+        )
+        print("Sequential reconstruction plots saved as 'sequential_reconstruction_flight_X_feature_Y.png'")
+    else:
+        plot_aircraft_type_comparison(orig_data, recon_data, aircraft_counts)
+        print("Aircraft type comparison plots saved as 'aircraft_comparison_feature_X.png' for each feature")
     # Original reconstruction plots
     # print("\nGenerating general reconstruction plots...")
     # plot_reconstructions(orig_data, recon_data)

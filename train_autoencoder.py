@@ -147,30 +147,30 @@ def train_sequential_autoencoder(
     val_ids,
     sequence_length_map,
     input_dim,
-    hidden_dim=64,
+    hidden_dim=16,
     batch_size=32,
-    n_epochs=100,
+    n_epochs=20,
     learning_rate=1e-4,
-    mask_length=10,  # Length of sequential mask
-    start_point=0.5,  # Starting point for mask (as fraction of sequence length)
+    mask_length=10,  
+    start_point=0.5,
     device="cuda" if torch.cuda.is_available() else "cpu",
     wandb_run=None
 ):
-    # Compute normalization parameters using only training data
+
     print("Computing normalization parameters...")
     data_reshaped = train_data.reshape(-1, input_dim)
     data_mean = np.mean(data_reshaped, axis=0)
     data_std = np.std(data_reshaped, axis=0)
     
-    # Avoid division by zero in normalization
+
     data_std[data_std == 0] = 1.0
     
-    # Normalize both training and validation data
+
     train_data_normalized = (train_data - data_mean) / data_std
     val_data_normalized = (val_data - data_mean) / data_std
     print("Normalization parameters computed.")
     
-    # Convert data to PyTorch datasets with flight IDs
+
     train_dataset = TensorDataset(
         torch.FloatTensor(train_data_normalized),
         torch.LongTensor([sequence_length_map[id] for id in train_ids])
@@ -282,14 +282,14 @@ if __name__ == "__main__":
                       help='Directory containing validation flight CSV files')
     parser.add_argument('--sequence_length_csv', type=str, required=True,
                       help='Path to CSV file containing flight_id to sequence_length mapping')
-    parser.add_argument('--hidden_dim', type=int, default=64,
-                      help='Hidden dimension size (default: 64)')
+    parser.add_argument('--hidden_dim', type=int, default=16,
+                      help='Hidden dimension size (default: 16)')
     parser.add_argument('--batch_size', type=int, default=32,
                       help='Batch size (default: 32)')
-    parser.add_argument('--n_epochs', type=int, default=100,
-                      help='Number of epochs (default: 100)')
-    parser.add_argument('--learning_rate', type=float, default=1e-3,
-                      help='Learning rate (default: 0.001)')
+    parser.add_argument('--n_epochs', type=int, default=20,
+                      help='Number of epochs (default: 20)')
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
+                      help='Learning rate (default: 0.0001)')
     parser.add_argument('--mask_length', type=int, default=10,
                       help='Length of sequential mask (default: 10)')
     parser.add_argument('--start_point', type=float, default=0.5,
