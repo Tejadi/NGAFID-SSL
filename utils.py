@@ -150,81 +150,64 @@ def get_aircraft_counts(data_dir):
     # Convert counter to list of counts in order of appearance
     return [count for _, count in sorted(aircraft_counter.items())]
 
-def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=None, feature_indices=[34]):
+def plot_aircraft_type_comparison(orig_data, recon_data, aircraft_counts, masks=None):
     """
-    Plot original vs reconstructed sequences for different aircraft types side by side.
+    Plot comparison of original and reconstructed data for each feature, with data points colored by aircraft type.
+    Also shows masked regions if masks are provided.
     
     Args:
-        original: Original data array (num_samples, timesteps, features)
-        reconstructed: Reconstructed data array (num_samples, timesteps, features)
-        aircraft_type_counts: List where each element represents count of each aircraft type in order.
-                            If None, defaults to [600, 297, 107]
-        feature_indices: List of feature indices to plot
+        orig_data: Original data array
+        recon_data: Reconstructed data array
+        aircraft_counts: Dictionary mapping aircraft types to their counts
+        masks: Boolean array indicating which regions were masked (True = kept, False = masked)
     """
-    if aircraft_type_counts is None:
-        aircraft_type_counts = [600, 297, 107]
+    n_features = orig_data.shape[2]
+    
+    for feature_idx in range(n_features):
+        plt.figure(figsize=(15, 6))
         
-    # Set the style with improved grid settings
-    sns.set_theme(style="whitegrid")
-    plt.rcParams['grid.color'] = '#E5E5E5'
-    plt.rcParams['grid.alpha'] = 0.5
-    
-    # Define contrasting colors
-    original_color = '#2E86C1'  # Strong blue
-    reconstructed_color = '#E74C3C'  # Strong red
-    
-    # Calculate starting indices for each aircraft type
-    start_indices = [0]
-    for count in aircraft_type_counts[:-1]:
-        start_indices.append(start_indices[-1] + count)
-    
-    # For each aircraft type, randomly select one sample
-    selected_indices = []
-    for i, count in enumerate(aircraft_type_counts):
-        if count > 0:
-            selected_indices.append(random.randint(start_indices[i], start_indices[i] + count - 1))
-    
-    # Print aircraft types in order
-    print("\nAircraft types from left to right in plots:")
-    for i in range(len(selected_indices)):
-        print(f"Position {i+1}: Aircraft Type {i+1}")
-    print()
-    
-    # Create plots for each feature
-    for feature_idx in feature_indices:
-        # Make the figure wider and slightly taller
-        fig = plt.figure(figsize=(20, 6))
+        # Plot original vs reconstructed for all points
+        plt.subplot(1, 2, 1)
+        plt.scatter(orig_data[:, :, feature_idx].flatten(), 
+                   recon_data[:, :, feature_idx].flatten(),
+                   alpha=0.1, s=1)
         
-        # Plot original and reconstructed data for each aircraft type
-        for i, idx in enumerate(selected_indices):
-            ax = plt.subplot(1, len(selected_indices), i + 1)
-            time_steps = np.arange(original.shape[1])
-            
-            # Plot original data with specific color
-            plt.plot(time_steps, original[idx, :, feature_idx], 
-                    alpha=0.8, linewidth=2, label='Original', color=original_color)
-            
-            # Plot reconstructed data with specific color
-            plt.plot(time_steps, reconstructed[idx, :, feature_idx], 
-                    alpha=0.8, linewidth=2, linestyle='--', label='Reconstructed', 
-                    color=reconstructed_color)
-            
-            plt.xlabel('Time Step')
-            plt.ylabel('Pitch Angle (deg)')
-            plt.legend()
-            
-            # Improve x-axis readability
-            ax.tick_params(axis='x', labelsize=10)
-            # Add more x-axis ticks
-            plt.xticks(np.arange(0, len(time_steps), len(time_steps)//10))
-            
-            # Ensure grid is visible with custom settings
-            ax.grid(True, color='#E5E5E5', alpha=0.5)
+        # Add diagonal line
+        min_val = min(orig_data[:, :, feature_idx].min(), recon_data[:, :, feature_idx].min())
+        max_val = max(orig_data[:, :, feature_idx].max(), recon_data[:, :, feature_idx].max())
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', alpha=0.5)
         
-        # Adjust layout with more width between subplots
-        plt.tight_layout(w_pad=3.0)
-        plt.savefig(f'aircraft_comparison_feature_{feature_idx}.png', 
-                   bbox_inches='tight', dpi=300)
+        plt.xlabel('Original Values')
+        plt.ylabel('Reconstructed Values')
+        plt.title(f'Feature {feature_idx} Reconstruction')
+        
+        # Plot time series comparison for a random flight
+        plt.subplot(1, 2, 2)
+        random_flight = np.random.randint(0, orig_data.shape[0])
+        
+        # Plot original data
+        plt.plot(orig_data[random_flight, :, feature_idx], 
+                label='Original', alpha=0.7)
+        
+        # Plot reconstructed data
+        plt.plot(recon_data[random_flight, :, feature_idx], 
+                label='Reconstructed', alpha=0.7)
+        
+        # If masks are provided, show masked regions
+        if masks is not None:
+            mask = masks[random_flight, :, feature_idx]
+            # Create shaded regions for masked areas
+            for i in range(len(mask)):
+                if not mask[i]:  # If the point was masked
+                    plt.axvspan(i-0.5, i+0.5, color='gray', alpha=0.2)
+        
+        plt.xlabel('Time Step')
+        plt.ylabel('Value')
+        plt.title(f'Feature {feature_idx} Time Series (Random Flight)')
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(f'aircraft_comparison_feature_{feature_idx}.png')
         plt.close()
 
 def load_sequence_lengths(csv_path):
