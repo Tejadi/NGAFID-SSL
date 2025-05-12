@@ -11,25 +11,7 @@ import argparse
 from datasets.transformation_dataset import mask_transform
 from tqdm import tqdm
 import wandb
-
-def load_flight_data(flight_dir):
-    # Get all CSV files in the directory
-    csv_files = list(Path(flight_dir).glob('*.csv'))
-    if not csv_files:
-        raise ValueError(f"No CSV files found in {flight_dir}")
-    
-    flights = []
-    for path in tqdm(csv_files, desc='Loading flight data'):
-        # Read CSV
-        flight = pd.read_csv(path)
-        # Convert to numpy array
-        flight_array = flight.values
-        flights.append(flight_array)
-    
-    # Stack all flights into a single array
-    # This will give you (N, T, F) shape
-    flights_array = np.stack(flights, axis=0)
-    return flights_array
+from utils import load_flight_data
 
 def train_autoencoder(
     train_data,
@@ -85,7 +67,7 @@ def train_autoencoder(
             original_data = data.cpu().numpy()
             masked_batch = []
             for sequence in original_data:
-                _, masked_sequence = mask_transform(
+                _, masked_sequence, _ = mask_transform(
                     sequence,
                     masking_ratio=masking_ratio,
                     mean_mask_length=mean_mask_length,
@@ -121,7 +103,7 @@ def train_autoencoder(
                 original_data = data.cpu().numpy()
                 masked_batch = []
                 for sequence in original_data:
-                    _, masked_sequence = mask_transform(
+                    _, masked_sequence, _ = mask_transform(
                         sequence,
                         masking_ratio=masking_ratio,
                         mean_mask_length=mean_mask_length,
@@ -184,8 +166,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Load and prepare data
-    train_data = load_flight_data(args.train_data_dir)
-    val_data = load_flight_data(args.val_data_dir)
+    train_data, _ = load_flight_data(args.train_data_dir)
+    val_data, _ = load_flight_data(args.val_data_dir)
     input_dim = train_data.shape[2]
     
     # Initialize wandb if not disabled
