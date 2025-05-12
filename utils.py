@@ -239,5 +239,5 @@ def load_sequence_lengths(csv_path):
     """
     df = pd.read_csv(csv_path)
     # Assuming CSV has columns 'flight_id' and 'sequence_length'
-    sequence_length_map = dict(zip(df['flight_id'], df['sequence_length']))
+    sequence_length_map = dict(zip(df['flight_id'], df['length']))
     return sequence_length_map
