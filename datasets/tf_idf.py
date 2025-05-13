@@ -36,7 +36,7 @@ class ScoreDatasetGenerator():
 
     self.num_flights = len(self.flight_ids)
 
-    self.get_scores()
+    # self.get_scores()
       
   def get_scores(self):
     event_flight_counts = self.events.groupby('name')['flight_id'].nunique().reset_index(name='NUM_FLIGHTS')
@@ -62,6 +62,7 @@ class ScoreDatasetGenerator():
     self.scores['tfidf'] = self.scores['tfidf'].fillna(0)
 
     self.scores.to_csv("NGAFID-LOCI-Data/flight_safety_scores.csv", index=False)
+    return self.scores
 
   def plot_non_zero_scores(self):
     sns.histplot(self.scores[self.scores['tfidf'] > 0]['tfidf'], kde=True)

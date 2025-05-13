@@ -54,7 +54,6 @@ def split_flights(db):
         db.insert_row('Dataset', data)
         print(split)
 
-
 class GADataset(Dataset):
     def __init__(self, db: DBInterface, split: str, dataset_id: int | None = None):
         """
@@ -95,18 +94,62 @@ class GADataset(Dataset):
     def __len__(self):
         return len(self.data)
 
+class ClassificationGADataset(GADataset):
+    def __init__(self, db: DBInterface, split: str, dataset_id: int | None = None, predict_engines: bool= False):
+        """
+        data_tensor: torch.Tensor of shape (N, 4096, 23)
+        label_tensor: torch.Tensor of shape (N,) or (N, 1)
+        """
+        super().__init__(db, split, dataset_id)
+        self.predict_engines = predict_engines
+
     def __getitem__(self, idx):
         flight = self.data[idx]
-        return flight.get_data()
+        return flight.get_data(self.predict_engines)
+
+class RegressionGADataset(GADataset):
+    def __init__(self,
+                 db: DBInterface,
+                 split: str,
+                 dataset_id: int | None = None,
+                 masking_ratio: float = 0.5,
+                 mean_mask_length: float = 5,
+                 mode: str = 'separate',
+                 distribution: str = 'geometric',
+                 exclude_feats: [] = None):
+        """
+        data_tensor: torch.Tensor of shape (N, 4096, 23)
+        label_tensor: torch.Tensor of shape (N,) or (N, 1)
+        """
+        super().__init__(db, split, dataset_id)
+        self.masking_ratio = masking_ratio
+        self.mean_mask_length = mean_mask_length
+        self.mode = mode
+        self.distribution = distribution
+        self.exclude_feats = exclude_feats
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        flight = self.data[idx]
+
+        return flight.get_masked_input(self.masking_ratio,
+                                       self.mean_mask_length,
+                                       self.mode,
+                                       self.distribution,
+                                       self.exclude_feats)
+
 
 def main():
     db = DBInterface("sqlite:///benchmarks.db")
 
-    dataset = GADataset(db, 'test')
+    dataset = RegressionGADataset(db, 'test')
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
     for x, y, f in loader:
-        print(f, x.shape, y)
+        print(f)
+        breakpoint()
 
 if __name__ == "__main__":
     main()

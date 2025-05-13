@@ -79,8 +79,10 @@ def dataloader_function(batch):
 
     return batch_combined
 
-def get_pos_pairs(non_zero=False):
-    scores = pd.read_csv(SS_PATH, index_col='flight_id')
+def get_pos_pairs(non_zero=False, scores=None):
+    if scores is None:
+        scores = pd.read_csv(SS_PATH, index_col='flight_id')
+
     flights_df = flight_paths()
 
     if non_zero:
@@ -127,7 +129,7 @@ def main():
     # assert args.n_views == 2, "Only two view training is supported. Please use --n-views 2."
     # check if gpu training is available
     if not args.disable_cuda and torch.cuda.is_available():
-        args.device = torch.device('cuda')
+        args.device = torch.device('cuda:0')
         cudnn.deterministic = True
         cudnn.benchmark = True
         args.gpu_index = 0
@@ -162,9 +164,10 @@ def main():
     # run.update()
 
     score_generator = ScoreDatasetGenerator()
+    scores = score_generator.get_scores()
 
-    all_pairs = get_pos_pairs()
-    non_zero_pairs = get_pos_pairs(non_zero=True)
+    all_pairs = get_pos_pairs(scores=scores)
+    # non_zero_pairs = get_pos_pairs(non_zero=False, scores=scores)
     
     # what is going on here?
     flight_id_to_paths = flight_paths()
@@ -173,8 +176,8 @@ def main():
     # flight = pd.read_csv(flight_id_to_paths['file_path'][33])
     # flight = flight.iloc[:, 2:]
 
-    # dataset = ScorePairDataset(all_pairs, flight_id_to_paths)
-    dataset = ScorePairDataset(non_zero_pairs, flight_id_to_paths)
+    dataset = ScorePairDataset(all_pairs, flight_id_to_paths)
+    # dataset = ScorePairDataset(non_zero_pairs, flight_id_to_paths)
     # dataset = TransformationDatasetReverse(flight_id_topath=flight_id_to_paths, reverse_masked=False, reverse_original=False)
 
     visualization_dataset = DefaultIterationDataset(flight_id_topath=flight_id_to_paths)

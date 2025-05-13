@@ -10,7 +10,7 @@ from benchmarks.conv_mhsa.flight import AIRCRAFT_CLASS, CLASS_AIRCRAFT, INPUT_CO
 from tqdm import tqdm
 
 def test(db, model, job_id, device):
-    dataset = GADataset(db, 'test')
+    dataset = GADataset(db, 'test', predict_engines=True)
     test_loader = DataLoader(dataset, batch_size=1, shuffle=True)
 
     model.eval()
@@ -37,6 +37,7 @@ def main():
     parser.add_argument("-n", "--name", type=str, required=True, dest="name")
     parser.add_argument("-l", "--lr", type=float, default=1e-4, dest="lr")
     parser.add_argument("-g", "--gpu", type=str, default='cuda', dest="gpu")
+    parser.add_argument("-E", "--engines", action='store_true')
 
     args = parser.parse_args()
 
@@ -55,10 +56,10 @@ def main():
 
     num_epochs = args.epochs
 
-    dataset_train = GADataset(db, 'train')
+    dataset_train = GADataset(db, 'train', predict_engines=True)
     train_loader = DataLoader(dataset_train, batch_size=16, shuffle=True)
 
-    dataset_val = GADataset(db, 'val')
+    dataset_val = GADataset(db, 'val', predict_engines=True)
     val_loader = DataLoader(dataset_val, batch_size=1, shuffle=True)
 
 
