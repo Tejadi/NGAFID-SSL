@@ -48,9 +48,6 @@ def load_config():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
-    # Convert relative paths to absolute
-    # Make sure load_config works without converting paths to absolute first
-    
     base_dir = Path(__file__).parent
     for key, path in config['paths'].items():
         config['paths'][key] = str(base_dir / path)
@@ -58,7 +55,6 @@ def load_config():
     return config
 
 def load_flight_data(flight_dir):
-    # Get all CSV files in the directory
     csv_files = list(Path(flight_dir).glob('*.csv'))
     if not csv_files:
         raise ValueError(f"No CSV files found in {flight_dir}")
@@ -66,27 +62,18 @@ def load_flight_data(flight_dir):
     flights = []
     flight_ids = []
     for path in tqdm(csv_files, desc='Loading flight data'):
-        # Extract flight ID from filename
         filename = path.name
-        # Find the number between 'flight_' and '.csv'
         flight_id = int(filename.split('flight_')[1].split('.csv')[0])
         flight_ids.append(flight_id)
         
-        # Read CSV
         flight = pd.read_csv(path)
-        # Convert to numpy array
         flight_array = flight.values
         flights.append(flight_array)
     
-    # Stack all flights into a single array
-    # This will give you (N, T, F) shape
     flights_array = np.stack(flights, axis=0)
     return flights_array, flight_ids
 
 def load_model(model_path, input_dim, hidden_dim, device):
-    """
-    Load a trained autoencoder model.
-    """
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
     model.load_state_dict(torch.load(model_path, map_location=device))
     model = model.to(device)
@@ -94,17 +81,12 @@ def load_model(model_path, input_dim, hidden_dim, device):
     return model
 
 def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], num_samples=10):
-    """
-    Plot original vs reconstructed sequences for visual comparison using seaborn.
-    """
-    # Set the seaborn style with improved grid settings
     sns.set_theme(style="whitegrid")
     plt.rcParams['grid.color'] = '#E5E5E5'
     plt.rcParams['grid.alpha'] = 0.5
     
-    # Define contrasting colors
-    original_color = '#2E86C1'  # Strong blue
-    reconstructed_color = '#E74C3C'  # Strong red
+    original_color = '#2E86C1'
+    reconstructed_color = '#E74C3C'
     
     num_total_samples = original.shape[0]
     random_indices = np.random.choice(num_total_samples, num_samples, replace=False)
@@ -114,7 +96,6 @@ def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], 
         for i, idx in enumerate(random_indices):
             plt.subplot(num_samples, 1, i + 1)
             
-            # Create a DataFrame for better seaborn plotting
             time_steps = np.arange(original.shape[1])
             data_orig = {'Time Step': time_steps, 
                         'Value': original[idx, :, feature_idx],
@@ -123,7 +104,6 @@ def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], 
                          'Value': reconstructed[idx, :, feature_idx],
                          'Type': ['Reconstructed'] * len(time_steps)}
             
-            # Plot using seaborn with specific colors
             sns.lineplot(data=data_orig, x='Time Step', y='Value', label='Original', 
                         alpha=0.8, linewidth=2, color=original_color)
             sns.lineplot(data=data_recon, x='Time Step', y='Value', label='Reconstructed',
@@ -132,79 +112,52 @@ def plot_reconstructions(original, reconstructed, feature_indices=[32, 33, 34], 
             plt.title(f'Sample {idx+1}, Feature {feature_idx}', pad=20, fontsize=12)
             plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left')
             
-            # Ensure grid is visible with custom settings
             plt.grid(True, color='#E5E5E5', alpha=0.5)
         
-        # Adjust layout to prevent overlap
         plt.tight_layout()
         plt.savefig(f'reconstruction_comparison_feature_{feature_idx}.png', 
                    bbox_inches='tight', dpi=300)
         plt.close()
 
 def get_aircraft_counts(data_dir):
-    """
-    Get the counts of each aircraft type from the data directory.
-    Returns a list of counts in order of appearance.
-    """
     aircraft_counter, _ = count_aircraft_types(data_dir)
-    # Convert counter to list of counts in order of appearance
     return [count for _, count in sorted(aircraft_counter.items())]
 
 def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=None, feature_indices=[34]):
-    """
-    Plot original vs reconstructed sequences for different aircraft types side by side.
-    
-    Args:
-        original: Original data array (num_samples, timesteps, features)
-        reconstructed: Reconstructed data array (num_samples, timesteps, features)
-        aircraft_type_counts: List where each element represents count of each aircraft type in order.
-                            If None, defaults to [600, 297, 107]
-        feature_indices: List of feature indices to plot
-    """
     if aircraft_type_counts is None:
         aircraft_type_counts = [600, 297, 107]
         
-    # Set the style with improved grid settings
     sns.set_theme(style="whitegrid")
     plt.rcParams['grid.color'] = '#E5E5E5'
     plt.rcParams['grid.alpha'] = 0.5
     
-    # Define contrasting colors
-    original_color = '#2E86C1'  # Strong blue
-    reconstructed_color = '#E74C3C'  # Strong red
+    original_color = '#2E86C1'
+    reconstructed_color = '#E74C3C'
     
-    # Calculate starting indices for each aircraft type
     start_indices = [0]
     for count in aircraft_type_counts[:-1]:
         start_indices.append(start_indices[-1] + count)
     
-    # For each aircraft type, randomly select one sample
     selected_indices = []
     for i, count in enumerate(aircraft_type_counts):
         if count > 0:
             selected_indices.append(random.randint(start_indices[i], start_indices[i] + count - 1))
     
-    # Print aircraft types in order
     print("\nAircraft types from left to right in plots:")
     for i in range(len(selected_indices)):
         print(f"Position {i+1}: Aircraft Type {i+1}")
     print()
     
-    # Create plots for each feature
     for feature_idx in feature_indices:
-        # Make the figure wider and slightly taller
         fig = plt.figure(figsize=(20, 6))
         
-        # Plot original and reconstructed data for each aircraft type
         for i, idx in enumerate(selected_indices):
             ax = plt.subplot(1, len(selected_indices), i + 1)
             time_steps = np.arange(original.shape[1])
             
-            # Plot original data with specific color
             plt.plot(time_steps, original[idx, :, feature_idx], 
                     alpha=0.8, linewidth=2, label='Original', color=original_color)
             
-            # Plot reconstructed data with specific color
             plt.plot(time_steps, reconstructed[idx, :, feature_idx], 
                     alpha=0.8, linewidth=2, linestyle='--', label='Reconstructed', 
                     color=reconstructed_color)
@@ -213,68 +166,36 @@ def plot_aircraft_type_comparison(original, reconstructed, aircraft_type_counts=
             plt.ylabel('Value')
             plt.legend()
             
-            # Improve x-axis readability
             ax.tick_params(axis='x', labelsize=10)
-            # Add more x-axis ticks
             plt.xticks(np.arange(0, len(time_steps), len(time_steps)//10))
             
-            # Ensure grid is visible with custom settings
             ax.grid(True, color='#E5E5E5', alpha=0.5)
         
-        # Adjust layout with more width between subplots
         plt.tight_layout(w_pad=3.0)
         plt.savefig(f'aircraft_comparison_feature_{feature_idx}.png', 
                    bbox_inches='tight', dpi=300)
         plt.close()
 
 def load_sequence_lengths(csv_path):
-    """
-    Load sequence lengths from a CSV file and create a mapping dictionary.
-    
-    Args:
-        csv_path (str): Path to CSV file containing flight_id to sequence_length mapping
-        
-    Returns:
-        dict: Dictionary mapping flight_id to sequence_length
-    """
     df = pd.read_csv(csv_path)
-    # Assuming CSV has columns 'flight_id' and 'sequence_length'
     sequence_length_map = dict(zip(df['flight_id'], df['length']))
     return sequence_length_map
 
 def plot_sequential_reconstructions(original, reconstructed, flight_ids, feature_indices=[34], start_point=0.5, mask_length=10, sequence_length_csv=None, num_samples=5):
-    """
-    Plot original vs reconstructed sequences for visual comparison, focusing on masked regions.
-    
-    Args:
-        original: Original data array (num_samples, timesteps, features)
-        reconstructed: Reconstructed data array (num_samples, timesteps, features)
-        flight_ids: List of flight IDs corresponding to the sequences
-        feature_indices: List of feature indices to plot
-        start_point: Starting point for mask as fraction of sequence length
-        mask_length: Length of sequential mask
-        sequence_length_csv: Path to CSV containing flight sequence lengths
-        num_samples: Number of random samples to plot
-    """
-    # Set the seaborn style with improved grid settings
     sns.set_theme(style="whitegrid")
     plt.rcParams['grid.color'] = '#E5E5E5'
     plt.rcParams['grid.alpha'] = 0.5
     
-    # Define contrasting colors
-    original_color = '#2E86C1'  # Strong blue
-    reconstructed_color = '#E74C3C'  # Strong red
-    mask_color = '#F7DC6F'  # Light yellow for mask shading
+    original_color = '#2E86C1'
+    reconstructed_color = '#E74C3C'
+    mask_color = '#F7DC6F'
     
-    # Load sequence lengths if provided
     if sequence_length_csv:
         seq_lengths = pd.read_csv(sequence_length_csv)
         seq_length_map = dict(zip(seq_lengths['flight_id'], seq_lengths['length']))
     else:
-        # Use maximum sequence length from data
         seq_length_map = {fid: original.shape[1] for fid in flight_ids}
     
-    # Randomly select samples
     num_total_samples = original.shape[0]
     random_indices = np.random.choice(num_total_samples, min(num_samples, num_total_samples), replace=False)
     
@@ -283,26 +204,20 @@ def plot_sequential_reconstructions(original, reconstructed, flight_ids, feature
             flight_id = flight_ids[idx]
             seq_len = seq_length_map[flight_id]
             
-            # Calculate mask region
             mask_start = int(start_point * seq_len)
             mask_end = min(mask_start + mask_length, seq_len)
             
-            # Create figure with two subplots
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
             
-            # Full sequence plot
             time_steps = np.arange(original.shape[1])
             
-            # Plot original data
             ax1.plot(time_steps, original[idx, :, feature_idx], 
                     alpha=0.8, linewidth=2, label='Original', color=original_color)
             
-            # Plot reconstructed data
             ax1.plot(time_steps, reconstructed[idx, :, feature_idx], 
                     alpha=0.8, linewidth=2, linestyle='--', label='Reconstructed', 
                     color=reconstructed_color)
             
-            # Shade masked region
             ax1.axvspan(mask_start, mask_end, color=mask_color, alpha=0.3, label='Masked Region')
             
             ax1.set_title(f'Full Sequence - Flight {flight_id}, Feature {feature_idx}')
@@ -310,24 +225,19 @@ def plot_sequential_reconstructions(original, reconstructed, flight_ids, feature
             ax1.set_ylabel('Value')
             ax1.legend()
             
-            # Zoomed plot of masked region
-            # Add padding to the view
             padding = mask_length // 2
             zoom_start = max(0, mask_start - padding)
             zoom_end = min(seq_len, mask_end + padding)
             
-            # Plot original data in zoomed region
             ax2.plot(time_steps[zoom_start:zoom_end], 
                     original[idx, zoom_start:zoom_end, feature_idx],
                     alpha=0.8, linewidth=2, label='Original', color=original_color)
             
-            # Plot reconstructed data in zoomed region
             ax2.plot(time_steps[zoom_start:zoom_end], 
                     reconstructed[idx, zoom_start:zoom_end, feature_idx],
                     alpha=0.8, linewidth=2, linestyle='--', label='Reconstructed', 
                     color=reconstructed_color)
             
-            # Shade masked region in zoomed plot
             ax2.axvspan(mask_start, mask_end, color=mask_color, alpha=0.3, label='Masked Region')
             
             ax2.set_title(f'Zoomed View of Masked Region - Flight {flight_id}, Feature {feature_idx}')
@@ -335,7 +245,6 @@ def plot_sequential_reconstructions(original, reconstructed, flight_ids, feature
             ax2.set_ylabel('Value')
             ax2.legend()
             
-            # Adjust layout
             plt.tight_layout()
             plt.savefig(f'sequential_reconstruction_flight_{flight_id}_feature_{feature_idx}.png',
                        bbox_inches='tight', dpi=300)

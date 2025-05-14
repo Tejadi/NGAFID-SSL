@@ -8,6 +8,6 @@ class TimeSeriesAutoencoder(nn.Module):
         self.decoder = nn.LSTM(2*hidden_dim, input_dim, batch_first=True)
 
     def forward(self, x):
-        enc_out, _ = self.encoder(x)  # [B, T, 2H]
-        dec_out, _ = self.decoder(enc_out)  # [B, T, F]
+        enc_out, _ = self.encoder(x)
+        dec_out, _ = self.decoder(enc_out)
         return dec_out

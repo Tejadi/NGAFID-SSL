@@ -5,10 +5,6 @@ from pathlib import Path
 from tqdm import tqdm
 
 def get_flight_id(filename):
-    """
-    Extract flight ID from filename between underscore and .csv
-    Example: something_12345.csv -> 12345
-    """
     try:
         return filename.split('_')[-1].split('.csv')[0]
     except Exception as e:
@@ -16,10 +12,6 @@ def get_flight_id(filename):
         return None
 
 def calculate_flight_length(csv_file):
-    """
-    Calculate the length of a flight from its CSV file.
-    Length is determined by the number of rows in the CSV.
-    """
     try:
         df = pd.read_csv(csv_file)
         return len(df)
@@ -28,29 +20,21 @@ def calculate_flight_length(csv_file):
         return None
 
 def process_directory(input_dir, output_file):
-    """
-    Process all CSV files in the input directory and create a mapping
-    of flight IDs to their lengths.
-    """
     input_path = Path(input_dir)
     flight_lengths = {}
 
-    # Check if directory exists
     if not input_path.exists() or not input_path.is_dir():
         raise ValueError(f"Input directory {input_dir} does not exist or is not a directory")
 
-    # Get list of CSV files first
     csv_files = list(input_path.glob("*.csv"))
     
-    # Process each CSV file with progress bar
     for csv_file in tqdm(csv_files, desc="Processing flights", unit="file"):
-        flight_id = get_flight_id(csv_file.name)  # Extract ID from filename
+        flight_id = get_flight_id(csv_file.name)
         if flight_id is not None:
             length = calculate_flight_length(csv_file)
             if length is not None:
                 flight_lengths[flight_id] = length
 
-    # Create DataFrame and save to CSV
     df = pd.DataFrame.from_dict(flight_lengths, orient='index', columns=['length'])
     df.index.name = 'flight_id'
     df.to_csv(output_file)

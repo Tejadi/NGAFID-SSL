@@ -26,38 +26,29 @@ def train_autoencoder(
     device="cuda" if torch.cuda.is_available() else "cpu",
     wandb_run=None
 ):
-    # Compute normalization parameters using only training data
     print("Computing normalization parameters...")
     data_reshaped = train_data.reshape(-1, input_dim)
     data_mean = np.mean(data_reshaped, axis=0)
     data_std = np.std(data_reshaped, axis=0)
     
-    # Avoid division by zero in normalization
     data_std[data_std == 0] = 1.0
     
-    # Normalize both training and validation data
     train_data_normalized = (train_data - data_mean) / data_std
     val_data_normalized = (val_data - data_mean) / data_std
     print("Normalization parameters computed.")
     
-    # Convert data to PyTorch datasets
     train_dataset = TensorDataset(torch.FloatTensor(train_data_normalized))
     val_dataset = TensorDataset(torch.FloatTensor(val_data_normalized))
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    # Initialize model
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
     model = model.to(device)
     
-    # Define loss function and optimizer
     criterion = nn.MSELoss()
-    # criterion = nn.L1Loss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # Training loop
     for epoch in tqdm(range(n_epochs), desc='Training epochs'):
-        # Training phase
         model.train()
         total_train_loss = 0
         
@@ -79,7 +70,6 @@ def train_autoencoder(
             
             masked_data = np.stack(masked_batch, axis=0)
             masked_data = torch.FloatTensor(masked_data).to(device)
-            
             reconstructed = model(masked_data)
             loss = criterion(reconstructed, data)
             
@@ -91,7 +81,6 @@ def train_autoencoder(
         
         avg_train_loss = total_train_loss / len(train_loader)
         
-        # Validation phase
         model.eval()
         total_val_loss = 0
 
@@ -115,7 +104,7 @@ def train_autoencoder(
                 
                 masked_data = np.stack(masked_batch, axis=0)
                 masked_data = torch.FloatTensor(masked_data).to(device)
-                
+                print(masked_data.shape)
                 reconstructed = model(masked_data)
                 val_loss = criterion(reconstructed, data)
                 total_val_loss += val_loss.item()
@@ -124,7 +113,6 @@ def train_autoencoder(
         
         print(f"Epoch [{epoch+1}/{n_epochs}], Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
         
-        # Log metrics to wandb if enabled
         if wandb_run is not None:
             wandb_run.log({
                 'epoch': epoch + 1,
@@ -132,7 +120,6 @@ def train_autoencoder(
                 'val_loss': avg_val_loss,
             })
     
-    # Save normalization parameters with the model
     normalization_params = {
         'mean': data_mean,
         'std': data_std
@@ -182,17 +169,13 @@ def train_sequential_autoencoder(
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     
-    # Initialize model
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
     model = model.to(device)
     
-    # Define loss function and optimizer
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     
-    # Training loop
     for epoch in tqdm(range(n_epochs), desc='Training epochs'):
-        # Training phase
         model.train()
         total_train_loss = 0
         
@@ -225,7 +208,6 @@ def train_sequential_autoencoder(
         
         avg_train_loss = total_train_loss / len(train_loader)
         
-        # Validation phase
         model.eval()
         total_val_loss = 0
 
@@ -257,7 +239,6 @@ def train_sequential_autoencoder(
         
         print(f"Epoch [{epoch+1}/{n_epochs}], Train Loss: {avg_train_loss:.6f}, Val Loss: {avg_val_loss:.6f}")
         
-        # Log metrics to wandb if enabled
         if wandb_run is not None:
             wandb_run.log({
                 'epoch': epoch + 1,
@@ -265,7 +246,6 @@ def train_sequential_autoencoder(
                 'val_loss': avg_val_loss,
             })
     
-    # Save normalization parameters with the model
     normalization_params = {
         'mean': data_mean,
         'std': data_std
@@ -274,14 +254,13 @@ def train_sequential_autoencoder(
     return model, normalization_params
 
 if __name__ == "__main__":
-    # Parse command line arguments
     parser = argparse.ArgumentParser(description='Train autoencoder on flight data')
     parser.add_argument('--train_data_dir', type=str, required=True,
                       help='Directory containing flight CSV files')
     parser.add_argument('--val_data_dir', type=str, required=True,
                       help='Directory containing validation flight CSV files')
-    parser.add_argument('--sequence_length_csv', type=str, required=True,
-                      help='Path to CSV file containing flight_id to sequence_length mapping')
+    parser.add_argument('--sequence_length_csv', type=str,
+                      help='Path to CSV file containing flight_id to sequence_length mapping (required for sequential masking)')
     parser.add_argument('--hidden_dim', type=int, default=16,
                       help='Hidden dimension size (default: 16)')
     parser.add_argument('--batch_size', type=int, default=32,
@@ -290,10 +269,14 @@ if __name__ == "__main__":
                       help='Number of epochs (default: 20)')
     parser.add_argument('--learning_rate', type=float, default=1e-4,
                       help='Learning rate (default: 0.0001)')
-    parser.add_argument('--mask_length', type=int, default=10,
-                      help='Length of sequential mask (default: 10)')
-    parser.add_argument('--start_point', type=float, default=0.5,
-                      help='Starting point for sequential mask as fraction of sequence length (default: 0.5)')
+    parser.add_argument('--mask_length', type=int,
+                      help='Length of sequential mask (required for sequential masking)')
+    parser.add_argument('--start_point', type=float,
+                      help='Starting point for sequential mask as fraction of sequence length (required for sequential masking)')
+    parser.add_argument('--masking_ratio', type=float,
+                      help='Ratio of values to mask (required for random masking)')
+    parser.add_argument('--mean_mask_length', type=int,
+                      help='Mean length of random masks (required for random masking)')
     parser.add_argument('--job_name', type=str, required=True,
                       help='Name for the wandb run')
     parser.add_argument('--disable_wandb', action='store_true',
@@ -302,13 +285,24 @@ if __name__ == "__main__":
                       help='Use sequential masking instead of random masking')
     args = parser.parse_args()
 
-    # Load and prepare data
+    if args.use_sequential:
+        if args.sequence_length_csv is None:
+            parser.error("--sequence_length_csv is required when using sequential masking")
+        if args.start_point is None:
+            parser.error("--start_point is required when using sequential masking")
+        if args.mask_length is None:
+            parser.error("--mask_length is required when using sequential masking")
+    else:
+        if args.masking_ratio is None:
+            parser.error("--masking_ratio is required when using random masking")
+        if args.mean_mask_length is None:
+            parser.error("--mean_mask_length is required when using random masking")
+
     train_data, train_ids = load_flight_data(args.train_data_dir)
     val_data, val_ids = load_flight_data(args.val_data_dir)
     sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
     input_dim = train_data.shape[2]
     
-    # Initialize wandb if not disabled
     if not args.disable_wandb:
         wandb.init(
             project="ngafid-ssl-fall-24",
@@ -335,7 +329,6 @@ if __name__ == "__main__":
     else:
         wandb_run = None
     
-    # Train the model
     if args.use_sequential:
         trained_model, normalization_params = train_sequential_autoencoder(
             train_data=train_data,
@@ -361,19 +354,16 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             n_epochs=args.n_epochs,
             learning_rate=args.learning_rate,
-            masking_ratio=0.6,
-            mean_mask_length=3,
+            masking_ratio=args.masking_ratio,
+            mean_mask_length=args.mean_mask_length,
             wandb_run=wandb_run
         )
     
-    # Save the trained model
     model_name = "trained_sequential_autoencoder.pth" if args.use_sequential else "trained_autoencoder.pth"
     torch.save(trained_model.state_dict(), model_name)
     
-    # Save normalization parameters
     norm_params_name = "sequential_normalization_params.npy" if args.use_sequential else "normalization_params.npy"
     np.save(norm_params_name, normalization_params)
     
-    # Close wandb run if it was used
     if wandb_run is not None:
         wandb.finish() 
