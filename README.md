@@ -53,6 +53,7 @@ Note that SimCLR benefits from **longer training**.
 
 
 ## Benchmarks
+### Training
 To run aircraft classification with ConvMHSA, run:
 ```
 python -m benchmarks.conv_mhsa.train -e <n epochs> -n 'My Job Name' -l 1e-5 -g <cuda GPU address (e.g. 'cuda:0')>
@@ -64,4 +65,17 @@ python -m benchmarks.simclr_classifier.classifier -m <simclr model path> -n 'My 
 For running masked column regression with SimCLR, run:
 ```
 python -m benchmarks.simclr_regression.regression -n 'My Job Name'  -m <simclr model path> -e <n epochs> -g <cuda GPU address (e.g. 'cuda:0')>
+```
+### Evaluation
+To evaluate an aircraft classification ConvMHSA model, run:
+```
+python -m benchmarks.conv_mhsa.train -m <model_path>
+```
+To evaluate an aircraft classification SimCLR model, run:
+```
+python -m benchmarks.simclr_classifier.classifier -C <class classifier path> -T <type classifier path> -j 89
+```
+To evaluate a masked column regression with SimCLR, run:
+```
+python -m benchmarks.simclr_regression.regression -m <model path> -E -r <mask ratio> -M <mask length>
 ```
