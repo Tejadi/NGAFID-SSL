@@ -80,8 +80,7 @@ def main():
             optimizer.step()
 
             running_loss += loss.item()
-             # Compute accuracy
-            _, preds = torch.max(preds, dim=1)  # Get predicted class indices
+            _, preds = torch.max(preds, dim=1)
             correct += (preds == batch_y).sum().item()
             total += batch_y.size(0)
 
@@ -100,7 +99,7 @@ def main():
                 loss = criterion(preds, batch_y)
                 val_running_loss += loss.item()
 
-                _, preds = torch.max(preds, dim=1)  # Get predicted class indices
+                _, preds = torch.max(preds, dim=1)
                 val_correct += (preds == batch_y).sum().item()
                 val_total += batch_y.size(0)
 

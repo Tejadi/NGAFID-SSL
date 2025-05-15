@@ -12,7 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 from models.resnet_simclr import ResNetSimCLR
 from benchmarks.conv_mhsa.loader import GADataset, DATA_PATH, RegressionGADataset
 from db.interface import DBInterface
-from train_autoencoder import load_flight_data
+from utils import load_flight_data
 from tqdm import tqdm
 from utils import plot_aircraft_type_comparison
 

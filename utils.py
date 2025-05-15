@@ -8,7 +8,7 @@ from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
-from autoencoder import TimeSeriesAutoencoder
+from benchmarks.autoencoder.autoencoder import TimeSeriesAutoencoder
 from count_aircraft_types import count_aircraft_types
 import matplotlib.pyplot as plt
 import seaborn as sns

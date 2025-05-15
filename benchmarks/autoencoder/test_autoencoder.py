@@ -157,7 +157,6 @@ if __name__ == "__main__":
     parser.add_argument('--use_sequential', action='store_true',
                       help='Use sequential masking instead of random masking')
     
-    # Create mutually exclusive argument groups for sequential and random masking
     sequential_group = parser.add_argument_group('Sequential masking parameters')
     sequential_group.add_argument('--sequence_length_csv', type=str,
                       help='Path to CSV file containing flight_id to sequence_length mapping')

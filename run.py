@@ -6,7 +6,6 @@ import wandb
 
 from datetime import datetime
 from torchvision import models
-from data_aug.contrastive_learning_dataset import ContrastiveLearningDataset
 from models.resnet_simclr import ResNetSimCLR
 from simclr import SimCLR
 from datasets.tf_idf import ScoreDatasetGenerator

@@ -18,21 +18,9 @@ AT_PATH = config['paths']['aircraft_types']
 
 
 def visualize(model, args, dataloader, dr_methods = ["PCA", "tSNE"]):
-    # X:                flight features                 (dataset size, feature size)
-    # safety_labels:    the safety score of each flight (dataset size, 1)
-    # aircraft_labels:  the aircraft type of each flight (dataset size, 1)
-    
-    # get flights
-    # get features from flights
-    # get flight safety scores
-    # get flight aircraft
-    # TODO: normalize 
-
-
     X = []
     ids = []
 
-    # model.remove_projector()
     model.eval()
 
     with torch.no_grad():  
@@ -56,13 +44,7 @@ def visualize(model, args, dataloader, dr_methods = ["PCA", "tSNE"]):
     flight_data.to_csv(f"~/data/ngafid/{args.job_name}.csv")
     print("Saved CSV")
 
-    # flight_data = flight_data[flight_data['tfidf'] > 0]
-
-    # form numpy array of (#flights, embedding_size)
     embeddings = np.stack(flight_data['embedding'].values)
-  
-    # Round each element to the nearest 0.1
-    # rounded_saftey_scores = torch.round(safety_labels * 10) / 10
 
     if "PCA" in dr_methods:
         normalized_embeddings = StandardScaler().fit_transform(embeddings)
@@ -80,7 +62,6 @@ def visualize(model, args, dataloader, dr_methods = ["PCA", "tSNE"]):
     
     if "TSNE" in dr_methods:
         normalized_embeddings = StandardScaler().fit_transform(embeddings)
-        # need to understand TSNE and its arguments better
         tsne = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42)
         components = tsne.fit_transform(normalized_embeddings)
         flight_data['Dim1'] = components[:, 0]
@@ -101,34 +82,6 @@ def visualize(model, args, dataloader, dr_methods = ["PCA", "tSNE"]):
         graph2(plus10to20, 'Dim1', 'Dim2', 'tfidf', 'TSNE')
         graph2(plus20to40, 'Dim1', 'Dim2', 'tfidf', 'TSNE')
         graph2(plus40to101, 'Dim1', 'Dim2', 'tfidf', 'TSNE')
-
-
-    
-    # if "PCA" in dr_methods:
-    #     pca = PCA(n_components=2, power_iteration_normalizer='auto')
-    #     X_r = pca.fit(features).transform(features)
-    #     # Percentage of variance explained for each components
-    #     print(
-    #         "explained variance ratio (first two components): %s"
-    #         % str(pca.explained_variance_ratio_)
-    #     )
-
-
-    #     # graph safety scores
-    #     graph(X_r, rounded_saftey_scores, [0,0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9], "safety scores")
-    #     # graph aircraft types
-    #     # graph(X_r, aircraft_labels, ["aircraft 1","aircraft 2","aircraft 3",], "aircraft type")
-    
-
-    # if "tSNE" in dr_methods:
-    #     tsne = TSNE(n_components=2, learning_rate='auto',
-    #               init='random', perplexity=3)
-    #     X_r = tsne.fit_transform(X)
-
-    #     # graph safety scores
-    #     graph(X_r, rounded_saftey_scores, [0,0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9], "safety scores")
-    #     # graph aircraft types
-    #     # graph(X_r, aircraft_labels, ["aircraft 1","aircraft 2","aircraft 3",], "aircraft type")
     
 def graph2(df, pc1_col, pc2_col, hue_col, dr_type):
     plt.figure(figsize=(10, 8))

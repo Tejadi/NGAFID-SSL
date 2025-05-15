@@ -173,7 +173,6 @@ def main(args):
     device = torch.device(args.gpu if torch.cuda.is_available() else "cpu")
     type_classifier, class_classifier = create_models(args.model, device)
 
-    # model = train(type_classifier, device, args.lr, args.epochs, args.name, type_classifier.out_dim, job_id)
     model = train(class_classifier, device, args.lr, args.epochs, args.name, type_classifier.out_dim, job_id)
 
     model_file = f'runs/{job_id}_{model.out_dim}.pth'

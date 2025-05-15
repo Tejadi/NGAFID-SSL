@@ -94,9 +94,9 @@ class ConvMHSAClassifier(nn.Module):
         self.final_layer = nn.Linear(512, n_classes)
 
     def forward(self, x):
-        x = x.transpose(1, 2)  # (B, C, L)
-        x = self.conv(x)      # (B, 512, L')
-        x = x.transpose(1, 2)  # (B, L', 512)
+        x = x.transpose(1, 2)
+        x = self.conv(x)
+        x = x.transpose(1, 2)
 
         x = self.encoder_layers(x)
 

@@ -5,7 +5,6 @@ from utils import load_config
 
 config = load_config()
 
-# DIR_PATH = '/oscar/data/sbach/bats/projects/ngafid/loci_dataset_fixed_keys/flights'
 DIR_PATH = config['paths']['fixed_keys_flights']
 def flight_paths():
 
@@ -18,7 +17,6 @@ def flight_paths():
         try:
             index_value = int(base_name.split("_")[-1].split(".")[0])
         except ValueError:
-            # Skip files that don't match the expected pattern
             print(f"Skipping file {file} as it does not end with '_<number>.csv'")
             continue
 
