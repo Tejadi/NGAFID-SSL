@@ -52,11 +52,6 @@ To evaluate an aircraft classification ConvMHSA model, run:
 python -m benchmarks.conv_mhsa.train -m <model_path>
 ```
 
-To evaluate an aircraft classification SimCLR model, run:
-```
-python -m benchmarks.simclr_classifier.classifier -C <class classifier path> -T <type classifier path> -j 89
-```
-
 ## Results
 
 Our model achieves the following performance on the provided preprocessed data:

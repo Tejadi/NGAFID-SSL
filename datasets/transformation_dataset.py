@@ -28,7 +28,7 @@ def mask_transform(X, masking_ratio=0.6, mean_mask_length=3, mode='separate', di
     transformed_X = X * mask
     return X, transformed_X, mask
 
-# Credit: Adapted from Repo mvts_transformer by Author George Zerveas from: https://github.dev/gzerveas/mvts_transformer
+# Credit: Adapted from Repo mvts_transformer by Author George Zerveas from: https://github.com/gzerveas/mvts_transformer
 # Original file: src/datasets/dataset.py, licensed under MIT
 def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats, random_seed=None):
 
@@ -55,7 +55,7 @@ def noise_mask(X, masking_ratio, lm, mode, distribution, exclude_feats, random_s
                                             p=(1 - masking_ratio, masking_ratio)), X.shape[1])
     return mask
 
-# Credit: Adapted from Repo mvts_transformer by Author George Zerveas from: https://github.dev/gzerveas/mvts_transformer
+# Credit: Adapted from Repo mvts_transformer by Author George Zerveas from: https://github.com/gzerveas/mvts_transformer
 # Original file: src/datasets/dataset.py, licensed under MIT
 def geom_noise_mask_single(L, lm, masking_ratio, random_seed=None):
     if random_seed is not None:

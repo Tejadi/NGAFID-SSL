@@ -8,7 +8,8 @@ import torch.nn as nn
 
 from torch.utils.data import Dataset, DataLoader
 from models.resnet_simclr import ResNetSimCLR
-from benchmarks.conv_mhsa.loader import GADataset
+from benchmarks.conv_mhsa.loader import GADataset, ClassificationGADataset
+from benchmarks.conv_mhsa.flight import AIRCRAFT_CLASS, CLASS_AIRCRAFT, AIRCRAFT_ENGINES, ENGINES_AIRCRAFT
 from db.interface import DBInterface
 from tqdm import tqdm
 
@@ -38,9 +39,31 @@ class ClassifierHead(nn.Module):
     def forward(self, x):
         x = x.unsqueeze(1)
 
-        f = self.backbone(x)        
+        f = self.backbone(x)
 
         return self.classifier(f)
+
+def test(db, model, job_id, device):
+    dataset = ClassificationGADataset(db, 'test', predict_engines=False)
+    test_loader = DataLoader(dataset, batch_size=1, shuffle=True)
+
+    model.eval()
+    with torch.no_grad():
+        for x, y, flight_id in tqdm(test_loader, desc="Testing", unit="instance"):
+            x, y = x.to(device), y.to(device)
+
+            outputs = model(x)
+            preds = torch.argmax(outputs, dim=1)
+
+            test_data = {
+                'job_id': job_id,
+                'flight_id': int(flight_id),
+                'predicted_aircraft': ENGINES_AIRCRAFT[int(preds)]
+            }
+
+            print(test_data)
+
+            db.insert_row('Test', test_data)
 
 def create_models(simclr_state_path, device):
     base_simclr = ResNetSimCLR("resnet18", out_dim=128).cpu()
@@ -155,6 +178,19 @@ def train(model, device, lr, epochs, name, out_dim, job_id):
 
     return model
 
+def load_existing(type_path, class_path, device):
+    base_simclr = ResNetSimCLR("resnet18", out_dim=128).cpu()
+
+    type_simclr  = copy.deepcopy(base_simclr).to(device)
+    class_simclr = copy.deepcopy(base_simclr).to(device)
+
+    type_classifier  = ClassifierHead(type_simclr,  out_dim=3).to(device)
+    class_classifier = ClassifierHead(class_simclr, out_dim=2).to(device)
+
+    type_classifier.load_state_dict(torch.load(type_path))
+    class_classifier.load_state_dict(torch.load(class_path))
+
+    return type_classifier, class_classifier
 
 def main(args):
     parser = argparse.ArgumentParser(description="description")
@@ -163,23 +199,31 @@ def main(args):
     parser.add_argument("-l", "--lr", type=float, default=1e-4, dest="lr")
     parser.add_argument("-e", "--epochs", type=int, default=50, dest="epochs")
     parser.add_argument("-g", "--gpu", type=str, default='cuda:1', dest="gpu")
-    parser.add_argument("-n", "--name", type=str, required=True, dest="name")
+    parser.add_argument("-n", "--name", type=str, dest="name")
+    parser.add_argument("-C", "--class-model-path", type=str, default="class_model_path", dest="class_model_path")
+    parser.add_argument("-T", "--type-model-path", type=str, default="type_model_path", dest="type_model_path")
+    parser.add_argument("-j", "--job-id", type=int, dest='job_id')
 
     args = parser.parse_args()
 
-    data = {'name': args.name}
-    job_id = db.insert_row('Job', data)
+    # data = {'name': args.name}
+    # job_id = db.insert_row('Job', data)
+    db = DBInterface("sqlite:///benchmarks.db")
 
     device = torch.device(args.gpu if torch.cuda.is_available() else "cpu")
-    type_classifier, class_classifier = create_models(args.model, device)
+    # type_classifier, class_classifier = create_models(args.model, device)
 
-    model = train(class_classifier, device, args.lr, args.epochs, args.name, type_classifier.out_dim, job_id)
+    # model = train(type_classifier, device, args.lr, args.epochs, args.name, type_classifier.out_dim, job_id)
+    # model = train(class_classifier, device, args.lr, args.epochs, args.name, type_classifier.out_dim, job_id)
 
-    model_file = f'runs/{job_id}_{model.out_dim}.pth'
-    with open(model_file, 'wb') as outfile:
-        outfile.write(state_dict.getbuffer())
-        db_data = {'job_id': job_id, 'model': model_file}
-        db.insert_row('Model', data=db_data)
+    type_classifier, class_classifier = load_existing(args.type_model_path, args.class_model_path, device)
+    test(db, class_classifier, args.job_id, device)
+
+    # model_file = f'runs/{job_id}_{model.out_dim}.pth'
+    # with open(model_file, 'wb') as outfile:
+    #     outfile.write(state_dict.getbuffer())
+    #     db_data = {'job_id': job_id, 'model': model_file}
+    #     db.insert_row('Model', data=db_data)
 
 if __name__ == "__main__":
     main(sys.argv)
