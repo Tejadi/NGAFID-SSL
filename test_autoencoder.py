@@ -50,16 +50,19 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
             
             original_denorm = data.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
             recon_denorm = reconstructed.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
+
+            original = data.cpu().numpy()
+            reconstructed = reconstructed.cpu().numpy()
             
-            mae = np.mean(np.abs(original_denorm - recon_denorm))
-            mse = np.mean((original_denorm - recon_denorm) ** 2)
+            mae = np.mean(np.abs(original - reconstructed))
+            mse = np.mean((original - reconstructed) ** 2)
             
             total_mae += mae
             total_mse += mse
             num_batches += 1
             
-            all_orig.append(original_denorm)
-            all_recon.append(recon_denorm)
+            all_orig.append(original)
+            all_recon.append(reconstructed)
             all_masks.append(np.stack(batch_masks, axis=0))
     
     avg_mae = total_mae / num_batches
