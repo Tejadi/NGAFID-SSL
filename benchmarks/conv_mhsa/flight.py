@@ -59,6 +59,7 @@ AIRCRAFT_ENGINES = {
 }
 
 CLASS_AIRCRAFT = {v: k for k, v in AIRCRAFT_CLASS.items()}
+ENGINES_AIRCRAFT = {v: k for k, v in AIRCRAFT_ENGINES.items()}
 
 class Flight:
     def __init__(self, flight_id: int, filename: str, aircraft_type: str):

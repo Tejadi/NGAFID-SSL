@@ -74,17 +74,28 @@ def eval(model_path, device, seq_len, feature_dim, mask_ratio, mask_len):
     model = reg_simclr
 
     mse = nn.MSELoss()
+    mae = nn.L1Loss()
 
     test_dataset = RegressionGADataset(db, 'test', masking_ratio=mask_ratio, mean_mask_length=mask_len)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
+
+    running_mse, running_mae = 0.0, 0.0
     for flights, labels, fid in tqdm(test_loader, desc='eval', unit="flight"):
         flights, labels = flights.to(device), labels.to(device)
         
         logits = model(flights)              
 
-        loss = mse(flights, logits)
+        loss_mse = mse(flights, logits)
+        loss_mae = mae(flights, logits)
 
-        print(f"Flight {fid}: {loss.item()}.")
+        running_mse += loss_mse.item()
+        running_mae += loss_mae.item()
+
+    mae = running_mae / len(test_loader)
+    mse = running_mse / len(test_loader)
+
+    print(f'Finished, mae={mae:.2f}, mse={mse:.2f}, rmse = {math.sqrt(mse):.2f}')
+
 
 
 
@@ -225,6 +236,7 @@ def main(args):
     args = parser.parse_args()
 
     device = torch.device(args.gpu if torch.cuda.is_available() else "cpu")
+    device = 'cuda:0'
 
     if args.eval:
         model_file = args.model
