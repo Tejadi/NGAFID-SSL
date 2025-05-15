@@ -2,7 +2,6 @@ import torch.nn as nn
 import torchvision.models as models
 
 from exceptions.exceptions import InvalidBackboneError
-from transformers import BertModel, BertTokenizer
 
 class ResNetSimCLR(nn.Module):
 
@@ -14,7 +13,6 @@ class ResNetSimCLR(nn.Module):
         self.backbone = self._get_basemodel(base_model)
         dim_mlp = self.backbone.fc.in_features
 
-        # add mlp projection head
         self.backbone.fc = nn.Sequential(nn.Linear(dim_mlp, dim_mlp), nn.ReLU(), self.backbone.fc)
 
     def _get_basemodel(self, model_name):

@@ -1,52 +1,85 @@
-## References
-This project is inspired by or implements ideas from:  
-- Zerveas, G., Jayaraman, S., Patel, D., Bhamidipaty, A., & Eickhoff, C. (2021). "A Transformer-Based Framework for Multivariate Time Series Representation Learning." In *Proceedings of the 27th ACM SIGKDD Conference on Knowledge Discovery & Data Mining (KDD '21)*, pp. 2114–2124. DOI: [10.1145/3447548.3467401](https://doi.org/10.1145/3447548.3467401).
+# GATS: A Time-Series Dataset for Addressing General Aviation Flight Safety 
 
+This repository is the official implementation of [GATS: A Time-Series Dataset for Addressing General Aviation Flight Safety ]. 
 
-# PyTorch SimCLR: A Simple Framework for Contrastive Learning of Visual Representations
-[![DOI](https://zenodo.org/badge/241184407.svg)](https://zenodo.org/badge/latestdoi/241184407)
+## Requirements
 
+To install requirements:
 
-### Blog post with full documentation: [Exploring SimCLR: A Simple Framework for Contrastive Learning of Visual Representations](https://sthalles.github.io/simple-self-supervised-learning/)
-
-![Image of SimCLR Arch](https://sthalles.github.io/assets/contrastive-self-supervised/cover.png)
-
-### See also [PyTorch Implementation for BYOL - Bootstrap Your Own Latent: A New Approach to Self-Supervised Learning](https://github.com/sthalles/PyTorch-BYOL).
-
-## Installation
-
-```
-$ conda env create --name simclr --file env.yml
-$ conda activate simclr
-$ python run.py
+```setup
+conda env create -f env.yml
 ```
 
-## Config file
+## Training
 
-Before running SimCLR, make sure you choose the correct running configurations. You can change the running configurations by passing keyword arguments to the ```run.py``` file.
+We provide several benchmark tasks that can be be reproduced.
 
-```python
+To train the autoencoder for missing data reconstruction, run the command:
 
-$ python run.py -data ./datasets --dataset-name stl10 --log-every-n-steps 100 --epochs 100 
-
+```train
+python benchmarks.autoencoder.train_autoencoder.py --train_data_dir <path_to_training_data> --val_data_dir <path_tovalidation_data> --job_name <my_job_name>
 ```
 
-If you want to run it on CPU (for debugging purposes) use the ```--disable-cuda``` option.
+For running masked column regression with SimCLR, run:
+```
+python -m benchmarks.simclr_regression.regression -n 'My Job Name'  -m <simclr model path> -e <n epochs> -g <cuda GPU address (e.g. 'cuda:0')>
+```
 
-For 16-bit precision GPU training, there **NO** need to to install [NVIDIA apex](https://github.com/NVIDIA/apex). Just use the ```--fp16_precision``` flag and this implementation will use [Pytorch built in AMP training](https://pytorch.org/docs/stable/notes/amp_examples.html).
+To run aircraft classification with ConvMHSA, run:
+```
+python -m benchmarks.conv_mhsa.train -e <n epochs> -n 'My Job Name' -l 1e-5 -g <cuda GPU address (e.g. 'cuda:0')>
+```
 
-## Feature Evaluation
+For running aircraft classification with SimCLR, run:
+```
+python -m benchmarks.simclr_classifier.classifier -m <simclr model path> -n 'My Job Name' -e <n epochs> -g <cuda GPU address (e.g. 'cuda:0')>
+```
 
-Feature evaluation is done using a linear model protocol. 
+## Evaluation
 
-First, we learned features using SimCLR on the ```STL10 unsupervised``` set. Then, we train a linear classifier on top of the frozen features from SimCLR. The linear model is trained on features extracted from the ```STL10 train``` set and evaluated on the ```STL10 test``` set. 
+To evaluate the autoencoder for missing data reconstruction, run the command:
+```eval
+python benchmarks.autoencoder.test_autoencoder --data_dir <path_to_testing_data> --model_path <path_to_trained_model> --norm_params_path <path_to_normalization_params_from_training>
+```
 
-Check the [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://github.com/sthalles/SimCLR/blob/simclr-refactor/feature_eval/mini_batch_logistic_regression_evaluator.ipynb) notebook for reproducibility.
+To evaluate a masked column regression with SimCLR, run:
+```
+python -m benchmarks.simclr_regression.regression -m <model path> -E -r <mask ratio> -M <mask length>
+```
 
-Note that SimCLR benefits from **longer training**.
+To evaluate an aircraft classification ConvMHSA model, run:
+```
+python -m benchmarks.conv_mhsa.train -m <model_path>
+```
 
-| Linear Classification      | Dataset | Feature Extractor | Architecture                                                                    | Feature dimensionality | Projection Head dimensionality | Epochs | Top1 % |
-|----------------------------|---------|-------------------|---------------------------------------------------------------------------------|------------------------|--------------------------------|--------|--------|
-| Logistic Regression (Adam) | STL10   | SimCLR            | [ResNet-18](https://drive.google.com/open?id=14_nH2FkyKbt61cieQDiSbBVNP8-gtwgF) | 512                    | 128                            | 100    | 74.45  |
-| Logistic Regression (Adam) | CIFAR10 | SimCLR            | [ResNet-18](https://drive.google.com/open?id=1lc2aoVtrAetGn0PnTkOyFzPCIucOJq7C) | 512                    | 128                            | 100    | 69.82  |
-| Logistic Regression (Adam) | STL10   | SimCLR            | [ResNet-50](https://drive.google.com/open?id=1ByTKAUsdm_X7tLcii6oAEl5qFRqRMZSu) | 2048                   | 128                            | 50     | 70.075 |
+To evaluate an aircraft classification SimCLR model, run:
+```
+python -m benchmarks.simclr_classifier.classifier -C <class classifier path> -T <type classifier path> -j 89
+```
+
+## Results
+
+Our model achieves the following performance on the provided preprocessed data:
+
+### Missing Data Reconstruction
+| Model name         | Mean Absolute Error  | Mean Squared Error |
+| ------------------ |---------------- | -------------- |
+| Masked Autoencoder  |     87.67         |      116518.01      |
+| SimCLR + Classification Head   |    334.65       |      1213261.07  |
+
+### Airframe Model Classification
+| Model name         | Accuracy |
+| ------------------ | -------------- |
+| ConvMHSA  |     0.99      |
+| SimCLR + Classification Head  |    0.82  |
+
+### Airframe Class Classification
+| Model name         | Accuracy |
+| ------------------ | -------------- |
+| ConvMHSA  |     1.00      |
+| SimCLR + Classification Head  |    0.30  |
+
+
+## Contributing
+
+This code is under the MIT License. Please refer to LICENSE.txt for more information.
