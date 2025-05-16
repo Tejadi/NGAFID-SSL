@@ -59,8 +59,8 @@ Our model achieves the following performance on the provided preprocessed data:
 ### Missing Data Reconstruction
 | Model name         | Mean Absolute Error  | Mean Squared Error |
 | ------------------ |---------------- | -------------- |
-| Masked Autoencoder  |     87.67         |      116518.01      |
-| SimCLR + Classification Head   |    334.65       |      1213261.07  |
+| Masked Autoencoder  |     0.46        |      0.62      |
+| SimCLR + Classification Head   |    4.44       |      25.50  |
 
 ### Airframe Model Classification
 | Model name         | Accuracy |
