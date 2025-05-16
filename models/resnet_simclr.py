@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torchvision.models as models
 
-from exceptions.exceptions import InvalidBackboneError
+# from exceptions.exceptions import InvalidBackboneError
 
 class ResNetSimCLR(nn.Module):
 
@@ -20,7 +20,7 @@ class ResNetSimCLR(nn.Module):
             model = self.resnet_dict[model_name]
             model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
         except KeyError:
-            raise InvalidBackboneError(
+            raise ValueError(
                 "Invalid backbone architecture. Check the config file and pass one of: resnet18 or resnet50")
         else:
             return model

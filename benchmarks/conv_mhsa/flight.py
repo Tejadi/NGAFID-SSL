@@ -1,5 +1,6 @@
 import torch
 import pandas as pd
+import numpy as np
 
 from typing import Tuple
 from datasets.transformation_dataset import mask_transform
@@ -61,6 +62,8 @@ AIRCRAFT_ENGINES = {
 CLASS_AIRCRAFT = {v: k for k, v in AIRCRAFT_CLASS.items()}
 ENGINES_AIRCRAFT = {v: k for k, v in AIRCRAFT_ENGINES.items()}
 
+NORM_PARAMS = np.load('/home/aidan/data/ngafid/normalization_params.npy', allow_pickle=True).item()
+
 class Flight:
     def __init__(self, flight_id: int, filename: str, aircraft_type: str):
         self.flight_id = flight_id
@@ -114,9 +117,11 @@ class Flight:
                          distribution: str = 'geometric',
                          exclude_feats: [] = None):
 
-        flight_data = self.df.values
+        np_data = np.array(self.df.values)
+        np_norm = np_data
+        np_norm = (np_data - NORM_PARAMS['mean']) / NORM_PARAMS['std']
 
-        flight_data, transformed_flight_data, _ = mask_transform(flight_data,
+        flight_data, transformed_flight_data, _ = mask_transform(np_norm,
                                                               masking_ratio=masking_ratio,
                                                               mean_mask_length=mean_mask_length,
                                                               mode=mode,
