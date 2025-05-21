@@ -11,7 +11,7 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
 
     model.eval()
     
-    test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
+     
     
     test_dataset = TensorDataset(torch.FloatTensor(test_data_normalized), torch.LongTensor(flight_ids))
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)

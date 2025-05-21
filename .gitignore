@@ -7,3 +7,6 @@ preprocessed_data_val/
 __pycache__/
 wandb/
 runs/
+5_5_model/
+05_60/
+sequential_masking/
