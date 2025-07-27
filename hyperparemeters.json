@@ -1,0 +1,51 @@
+{
+    "ml_methods": {
+      "masked_autoencoder_column_reconstruction": {
+        "experiment_name": "Masked Autoencoder Column Reconstruction",
+        "model_architecture": {
+          "model_type": "TimeSeriesAutoencoder",
+          "encoder": "Bidirectional LSTM",
+          "decoder": "LSTM",
+          "hidden_dim": 64
+        },
+        "training_hyperparameters": {
+          "learning_rate": 0.001,
+          "batch_size": 32,
+          "num_epochs": 100,
+          "optimizer": "Adam",
+          "loss_function": "MSE"
+        }
+      },
+      "simclr_column_reconstruction": {
+        "experiment_name": "Contrastive Learning Column Reconstruction",
+        "model_architecture": {
+          "model_type": "ResNetSimCLR",
+          "backbone": "resnet18",
+          "feature_dim": 128
+        },
+        "training_hyperparameters": {
+          "learning_rate": 0.0003,
+          "batch_size": 16,
+          "num_epochs": 200,
+          "optimizer": "Adam",
+          "loss_function": "CrossEntropyLoss",
+          "weight_decay": 0.0001
+        }
+      },
+      "supervised_aircraft_type_classification": {
+        "experiment_name": "Supervised Aircraft Type Classification",
+        "model_architecture": {
+          "model_type": "ResNetSimCLR",
+          "backbone": "resnet18"
+        },
+        "training_hyperparameters": {
+          "learning_rate": 0.0003,
+          "batch_size": 16,
+          "num_epochs": 100,
+          "optimizer": "Adam",
+          "loss_function": "CrossEntropyLoss",
+          "weight_decay": 0.0008
+        }
+      }
+    }
+  } 
