@@ -1,3 +1,4 @@
+from types import ClassMethodDescriptorType
 import torch
 import argparse
 import torch.nn as nn
@@ -5,12 +6,14 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from db.interface import DBInterface
 from benchmarks.conv_mhsa.model import ConvMHSAClassifier
-from benchmarks.conv_mhsa.loader import GADataset
-from benchmarks.conv_mhsa.flight import AIRCRAFT_CLASS, CLASS_AIRCRAFT, INPUT_COLS
+from benchmarks.conv_mhsa.loader import ClassificationGADataset, GADataset
+from benchmarks.conv_mhsa.flight import AIRCRAFT_CLASS, CLASS_AIRCRAFT, ENGINES_AIRCRAFT, INPUT_COLS
 from tqdm import tqdm
 
-def test(db, model, job_id, device):
-    dataset = GADataset(db, 'test', predict_engines=True)
+DATASET_ID = 1
+
+def test(db, model, job_id, device, engines):
+    dataset = ClassificationGADataset(db, 'test', predict_engines=engines, dataset_id=1)
     test_loader = DataLoader(dataset, batch_size=1, shuffle=True)
 
     model.eval()
@@ -21,10 +24,15 @@ def test(db, model, job_id, device):
             outputs = model(x)
             preds = torch.argmax(outputs, dim=1)
 
+            if engines:
+                acft_type = ENGINES_AIRCRAFT[int(preds)]
+            else:
+                acft_type = CLASS_AIRCRAFT[int(preds)]
+
             test_data = {
                 'job_id': job_id,
                 'flight_id': int(flight_id),
-                'predicted_aircraft': CLASS_AIRCRAFT[int(preds)]
+                'predicted_aircraft': acft_type
             }
 
             db.insert_row('Test', test_data)
@@ -37,7 +45,7 @@ def main():
     parser.add_argument("-n", "--name", type=str, required=True, dest="name")
     parser.add_argument("-l", "--lr", type=float, default=1e-4, dest="lr")
     parser.add_argument("-g", "--gpu", type=str, default='cuda', dest="gpu")
-    parser.add_argument("-E", "--engines", action='store_true')
+    parser.add_argument("-E", "--engines", action='store_true', dest='engines')
     parser.add_argument("-m", "--model-path", type=str, default=None, dest="model")
 
     args = parser.parse_args()
@@ -49,7 +57,7 @@ def main():
     data = {'name': args.name}
     job_id = db.insert_row('Job', data)
 
-    model = ConvMHSAClassifier(input_channels=44, n_classes=3)
+    model = ConvMHSAClassifier(input_channels=41, n_classes=3)
     model = model.to(device)
 
     if args.model is None:
@@ -58,10 +66,10 @@ def main():
 
         num_epochs = args.epochs
 
-        dataset_train = GADataset(db, 'train', predict_engines=True)
+        dataset_train = ClassificationGADataset(db, 'train', predict_engines=args.engines, dataset_id=DATASET_ID)
         train_loader = DataLoader(dataset_train, batch_size=16, shuffle=True)
 
-        dataset_val = GADataset(db, 'val', predict_engines=True)
+        dataset_val = ClassificationGADataset(db, 'val', predict_engines=args.engines, dataset_id=DATASET_ID)
         val_loader = DataLoader(dataset_val, batch_size=1, shuffle=True)
 
 
@@ -90,7 +98,7 @@ def main():
                 pbar.set_postfix(loss=running_loss / (pbar.n + 1), acc=accuracy)
 
             val_accuracy, val_correct, val_total, val_running_loss = 0, 0, 0, 0
-            val_pbar = tqdm(train_loader, desc=f"Validation epoch {epoch+1}/{num_epochs}", unit="batch")
+            val_pbar = tqdm(val_loader, desc=f"Validation epoch {epoch+1}/{num_epochs}", unit="batch")
 
             with torch.no_grad():
                 model.eval()
@@ -120,11 +128,11 @@ def main():
 
             db.insert_row('Training', epoch_data)
 
-        test(db, model, job_id, device)
+        test(db, model, job_id, device, args.engines)
     else:
         ckpt = torch.load(args.model, map_location=device)
         model.load_state_dict(ckpt['state_dict'])
-        test(db, model, job_id, device)
+        test(db, model, job_id, devic, args.engines)
 
 
 if __name__ == "__main__":
