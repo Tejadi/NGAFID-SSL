@@ -350,10 +350,13 @@ def main():
             running_num += float(num.detach().item())
             running_den += float(den.detach().item())
 
-            wandb.log({
+            step_data = {
                 'loss': loss,
                 'log_loss': torch.log(loss)
-            })
+            } 
+
+            print(step_data)
+            wandb.log(step_data)
 
             if step_i % 50 == 0:
                 pbar.set_postfix({
