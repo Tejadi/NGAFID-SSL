@@ -352,7 +352,7 @@ def main():
 
             wandb.log({
                 'loss': loss,
-                'log_loss': np.log(loss)
+                'log_loss': torch.log(loss)
             })
 
             if step_i % 50 == 0:
