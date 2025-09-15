@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
+import wandb
 import argparse
 import math
+import glob
 import os
 from typing import Iterable, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import IterableDataset, DataLoader
 from tqdm import tqdm
+from utils import load_config
 
 from datasets import load_dataset
 from huggingface_hub import list_repo_files
+from ngafid_datasets.masked_flight_dataset import MaskedFlightDataset
+
+# Load configuration
+config = load_config()
+SS_PATH = config['paths']['flight_scores']
+FLT_PATH = config['paths']['fixed_keys_flights']
 
 # === Your model ===
 try:
@@ -237,30 +247,47 @@ def main():
         device = torch.device("cpu")
     print(f"[info] device: {device}")
 
-    # Build the streaming dataset (no files saved locally)
-    stream_ds = HFStreamedMaskedWindows(
-        repo_id=args.hf_repo,
-        split=args.hf_split,
-        subdir=args.hf_subdir,
-        seq_len=args.seq_len,
-        step=args.step,
-        masking=args.masking,
-        masking_ratio=args.masking_ratio,
-        mean_mask_length=args.mean_mask_length,
-        start_point=args.start_point,
-        mask_length=args.mask_length,
-        max_files=args.max_files,
-        revision=args.hf_revision,
-        show_file_progress=True,
-        normalize=args.normalize,
-        norm_eps=args.norm_eps,
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="ngafid-ssl-fall-24",
+        entity="ngafid-ssl",
+        name=f'Transformer bs={args.batch_size}, lr={args.lr}, n_epochs={args.epochs}.',
+
+        # track hyperparameters and run metadata
+        config={
+            'learning_rate': args.lr,
+            'epochs': args.epochs,
+        }
     )
-    print(f"[info] streaming from repo='{args.hf_repo}' split='{args.hf_split}' subdir='{args.hf_subdir}' "
-          f"revision='{args.hf_revision}'  |  files: ~{len(stream_ds.file_paths)}")
-    print(f"[info] detected numeric feature_count (F) = {stream_ds.n_features}  |  seq_len (S) = {args.seq_len}")
+
+    files = glob.glob(os.path.join(FLT_PATH, "*.csv"))
+    flight_paths_df = pd.DataFrame(files, columns=['file_path'])
+
+    # Build the streaming dataset (no files saved locally)
+    dataset = MaskedFlightDataset(flight_paths_df, masking_ratio=0.6, mean_mask_length=3)
+    # stream_ds = HFStreamedMaskedWindows(
+        # repo_id=args.hf_repo,
+        # split=args.hf_split,
+        # subdir=args.hf_subdir,
+        # seq_len=args.seq_len,
+        # step=args.step,
+        # masking=args.masking,
+        # masking_ratio=args.masking_ratio,
+        # mean_mask_length=args.mean_mask_length,
+        # start_point=args.start_point,
+        # mask_length=args.mask_length,
+        # max_files=args.max_files,
+        # revision=args.hf_revision,
+        # show_file_progress=True,
+        # normalize=args.normalize,
+        # norm_eps=args.norm_eps,
+    # )
+    # print(f"[info] streaming from repo='{args.hf_repo}' split='{args.hf_split}' subdir='{args.hf_subdir}' "
+          # f"revision='{args.hf_revision}'  |  files: ~{len(stream_ds.file_paths)}")
+    # print(f"[info] detected numeric feature_count (F) = {stream_ds.n_features}  |  seq_len (S) = {args.seq_len}")
 
     loader = DataLoader(
-        stream_ds,
+        dataset,
         batch_size=args.batch_size,
         shuffle=False,          # IterableDataset does not support shuffle=True
         num_workers=0,
@@ -268,7 +295,7 @@ def main():
     )
 
     model = BartAutoencoder(
-        input_dim=stream_ds.n_features,
+        input_dim=44,
         d_model=args.d_model,
         num_heads=args.num_heads,
         num_encoder_layers=args.num_encoder_layers,
@@ -323,6 +350,11 @@ def main():
             running_num += float(num.detach().item())
             running_den += float(den.detach().item())
 
+            wandb.log({
+                'loss': loss,
+                'log_loss': np.log(loss)
+            })
+
             if step_i % 50 == 0:
                 pbar.set_postfix({
                     "mse(target)": f"{(running_num/max(running_den,1.0)):.6f}",
@@ -330,6 +362,7 @@ def main():
                 })
 
         epoch_mse = running_num / max(running_den, 1.0)
+        wandb.log({'mse_loss': epoch_mse})
         print(f"[info] epoch {epoch:02d}  MSE({args.loss_on}) = {epoch_mse:.6f}")
 
     print("[info] training finished")
