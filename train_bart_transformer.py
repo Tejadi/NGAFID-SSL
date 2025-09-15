@@ -297,21 +297,24 @@ def main():
             X_orig   = X_orig.to(device)
             mask     = mask.to(device).float()
 
-            # Decide where to apply the loss
+            # For autoencoder training: apply loss only to MASKED positions
+            # mask == 1 means "this position was masked and needs to be reconstructed"
             if args.loss_on == "masked":
-                weight = mask
+                weight = mask  # Apply loss where mask == 1 (masked tokens)
             elif args.loss_on == "unmasked":
-                weight = 1.0 - mask
+                weight = 1.0 - mask  # Apply loss where mask == 0 (unmasked tokens)
             else:  # "all"
                 weight = torch.ones_like(mask)
 
             opt.zero_grad(set_to_none=True)
-            y = model(X_masked)  # [B, S, F]
+            y = model(X_masked)  # [B, S, F] - reconstruct from masked input
 
-            sq_err = (y - X_orig) ** 2                      # elementwise
-            num = (sq_err * weight).sum()                   # sum over targeted elements
-            den = weight.sum().clamp_min(1.0)               # count of targeted elements
-            loss = num / den                                # average per targeted element
+            # Compute MSE loss
+            sq_err = (y - X_orig) ** 2                      # [B, S, F] elementwise squared error
+            weighted_err = sq_err * weight                   # Apply loss weighting
+            num = weighted_err.sum()                         # Sum of weighted errors
+            den = weight.sum().clamp_min(1.0)               # Count of weighted elements
+            loss = num / den                                 # Mean squared error over target elements
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
