@@ -173,6 +173,9 @@ class LocalFlightDataset(IterableDataset):
 
         return normalized_data
 
+    def __len__(self) -> int:
+        return len(self.split_files)
+
     def __iter__(self) -> Iterator[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         """
         Iterate through the dataset, yielding windowed and masked flight data.

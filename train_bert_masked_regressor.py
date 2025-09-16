@@ -353,8 +353,8 @@ def main():
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
         wandb.config.update({
-            "model_parameters": count_parameters(model),
-            "feat_dim": feat_dim,
+            "model_parameters": str(count_parameters(model)),
+            # "feat_dim": str(feat_dim),
         })
 
     # Setup optimizer
