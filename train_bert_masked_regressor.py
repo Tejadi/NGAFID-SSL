@@ -175,6 +175,7 @@ def evaluate_model(model, dataloader, device, max_batches: int = 100) -> Dict[st
     model.eval()
     total_loss = 0.0
     total_samples = 0
+    total_masked_positions = 0
 
     with torch.no_grad():
         for batch_idx, (x_masked, x_original, mask) in enumerate(dataloader):
@@ -187,12 +188,21 @@ def evaluate_model(model, dataloader, device, max_batches: int = 100) -> Dict[st
 
             loss, _ = model.compute_loss(x_masked, x_original, mask)
 
+            # Count masked positions for per-position metrics
+            masked_positions = (mask == 0).sum().item()
+
             total_loss += loss.item() * x_masked.size(0)
             total_samples += x_masked.size(0)
+            total_masked_positions += masked_positions
 
     avg_loss = total_loss / total_samples if total_samples > 0 else float('inf')
+    avg_mse_per_position = avg_loss * total_samples / total_masked_positions if total_masked_positions > 0 else float('inf')
 
-    return {"eval_loss": avg_loss}
+    return {
+        "eval_loss": avg_loss,
+        "eval_mse_per_position": avg_mse_per_position,
+        "eval_masked_positions": total_masked_positions / total_samples if total_samples > 0 else 0
+    }
 
 
 def main():
@@ -362,6 +372,7 @@ def main():
 
     global_step = 0
     best_eval_loss = float('inf')
+    best_eval_mse_per_position = float('inf')
 
     for epoch in range(args.epochs):
         model.train()
@@ -397,13 +408,22 @@ def main():
 
             # Log training metrics
             if global_step % 100 == 0:
+                # Compute per-position metrics for current batch
+                masked_positions = (mask == 0).sum().item()
+                mse_per_position = loss.item() / masked_positions if masked_positions > 0 else 0
+                masking_ratio = masked_positions / mask.numel()
+
                 writer.add_scalar("train/loss", loss.item(), global_step)
+                writer.add_scalar("train/mse_per_position", mse_per_position, global_step)
                 writer.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step)
+                writer.add_scalar("train/masking_ratio", masking_ratio, global_step)
 
                 # W&B logging
                 if use_wandb:
                     wandb.log({
                         "train/loss": loss.item(),
+                        "train/mse_per_position": mse_per_position,
+                        "train/masking_ratio": masking_ratio,
                         "train/lr": scheduler.get_last_lr()[0],
                         "train/epoch": epoch + (batch_idx / len(train_loader)),
                         "train/step": global_step,
@@ -423,19 +443,24 @@ def main():
                 eval_metrics = evaluate_model(model, val_loader, device)
 
                 writer.add_scalar("eval/loss", eval_metrics["eval_loss"], global_step)
+                writer.add_scalar("eval/mse_per_position", eval_metrics["eval_mse_per_position"], global_step)
+                writer.add_scalar("eval/masked_positions", eval_metrics["eval_masked_positions"], global_step)
 
                 # W&B evaluation logging
                 if use_wandb:
                     wandb.log({
                         "eval/loss": eval_metrics["eval_loss"],
+                        "eval/mse_per_position": eval_metrics["eval_mse_per_position"],
+                        "eval/masked_positions": eval_metrics["eval_masked_positions"],
                         "eval/step": global_step,
                     }, step=global_step)
 
-                pbar.write(f"Step {global_step}: Eval loss = {eval_metrics['eval_loss']:.4f}")
+                pbar.write(f"Step {global_step}: Eval loss = {eval_metrics['eval_loss']:.4f}, MSE/pos = {eval_metrics['eval_mse_per_position']:.4f}")
 
                 # Save best model
                 if eval_metrics["eval_loss"] < best_eval_loss:
                     best_eval_loss = eval_metrics["eval_loss"]
+                    best_eval_mse_per_position = eval_metrics["eval_mse_per_position"]
                     # Add feature dimension to args for model loading
                     save_args = vars(args).copy()
                     save_args['feat_dim'] = feat_dim
@@ -495,11 +520,13 @@ def main():
     }, os.path.join(output_dir, "final_model.pt"))
 
     print(f"Training completed! Best eval loss: {best_eval_loss:.4f}")
+    print(f"Best MSE per position: {best_eval_mse_per_position:.4f}")
     print(f"Models saved to: {output_dir}")
 
     # Final W&B summary
     if use_wandb:
         wandb.summary["best_eval_loss"] = best_eval_loss
+        wandb.summary["best_eval_mse_per_position"] = best_eval_mse_per_position
         wandb.summary["total_epochs"] = args.epochs
         wandb.summary["total_steps"] = global_step
         wandb.finish()

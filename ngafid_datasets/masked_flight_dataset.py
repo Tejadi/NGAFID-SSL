@@ -25,7 +25,7 @@ def noise_mask(X, masking_ratio, mean_mask_length, mode='separate', distribution
 def geom_noise_mask_single(L, avg_mask_len, masking_ratio):
     mask = np.ones(L, dtype=bool)
     p_m = 1.0 / avg_mask_len                     # prob to end a masked segment
-    p_u = p_m * masking_ratio / (1 - masking_ratio)  # prob to end an unmasked segment
+    p_u = p_m * (1 - masking_ratio) / masking_ratio  # prob to end an unmasked segment (FIXED)
     state = False if np.random.rand() < masking_ratio else True  # start in masked state with given ratio
     for i in range(L):
         mask[i] = state  # True = keep original, False = mask out
