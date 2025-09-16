@@ -31,10 +31,20 @@ cd bert-flight-project/
 module load anaconda3  # or whatever your cluster uses
 conda create -n bert-flight python=3.10 -y
 conda activate bert-flight
-pip install torch transformers datasets pandas tqdm tensorboard
+pip install torch transformers datasets pandas tqdm tensorboard wandb
 ```
 
-### 3. Submit Training Job
+### 3. Configure Weights & Biases (Optional but Recommended)
+```bash
+# Login to W&B for experiment tracking
+wandb login
+# Follow the prompts to enter your API key from https://wandb.ai/authorize
+
+# Or set up offline mode if internet is limited
+export WANDB_MODE=offline
+```
+
+### 4. Submit Training Job
 ```bash
 # Make scripts executable
 chmod +x submit_training.sh
@@ -68,6 +78,9 @@ tail -f logs/bert_training_JOBID.err
 
 # See what files have been created
 ls -la bert_results/
+
+# View training progress on Weights & Biases (if configured)
+# Visit https://wandb.ai/your-username/bert-flight-ssl
 ```
 
 ### If Something Goes Wrong
@@ -92,6 +105,7 @@ sinfo
 - **Runtime**: 24 hours max
 - **Memory**: 64GB
 - **GPUs**: 1 GPU
+- **Experiment Tracking**: Weights & Biases enabled (`bert-flight-ssl` project)
 
 ### To Modify Settings:
 Edit `slurm_train_bert.sh` and change the training parameters:
@@ -108,6 +122,12 @@ Edit `slurm_train_bert.sh` and change the training parameters:
 
 # For more/less time:
 #SBATCH --time=48:00:00  # 48 hours
+
+# To disable W&B logging:
+--no_wandb
+
+# To use custom W&B project:
+--wandb_project "my-custom-project"
 ```
 
 ## 🎯 Expected Outputs

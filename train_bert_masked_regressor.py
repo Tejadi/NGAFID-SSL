@@ -22,6 +22,14 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from tqdm import tqdm
 
+# Weights & Biases for experiment tracking
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("wandb not available - skipping W&B logging")
+
 # Import our models and dataset
 try:
     from models.bert_masked_regressor import BertMaskedRegressor, count_parameters
@@ -103,6 +111,16 @@ def parse_args():
                         help="Output directory for models and logs")
     parser.add_argument("--job_name", type=str, default=None,
                         help="Job name for this run")
+
+    # Weights & Biases arguments
+    parser.add_argument("--wandb_project", type=str, default="bert-flight-ssl",
+                        help="W&B project name")
+    parser.add_argument("--wandb_entity", type=str, default=None,
+                        help="W&B entity/team name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                        help="W&B run name (defaults to job_name)")
+    parser.add_argument("--no_wandb", action="store_true",
+                        help="Disable W&B logging")
 
     return parser.parse_args()
 
@@ -190,6 +208,21 @@ def main():
     # Setup output directory
     output_dir = setup_output_dir(args)
     writer = SummaryWriter(os.path.join(output_dir, "logs"))
+
+    # Initialize Weights & Biases
+    use_wandb = WANDB_AVAILABLE and not args.no_wandb
+    if use_wandb:
+        wandb_run_name = args.wandb_run_name or args.job_name or f"bert_h{args.hidden_size}_l{args.encoder_layers}_{int(time.time())}"
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=wandb_run_name,
+            config=vars(args),
+            dir=output_dir,
+        )
+        print(f"🪄 W&B tracking: {wandb.run.url}")
+    else:
+        print("📝 Using only TensorBoard logging")
 
     print("Creating data loaders...")
 
@@ -306,6 +339,14 @@ def main():
 
     print(f"Model parameters: {count_parameters(model):,}")
 
+    # Log model to W&B
+    if use_wandb:
+        wandb.watch(model, log="all", log_freq=100)
+        wandb.config.update({
+            "model_parameters": count_parameters(model),
+            "feat_dim": feat_dim,
+        })
+
     # Setup optimizer
     optimizer = optim.AdamW(
         model.parameters(),
@@ -359,6 +400,15 @@ def main():
                 writer.add_scalar("train/loss", loss.item(), global_step)
                 writer.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step)
 
+                # W&B logging
+                if use_wandb:
+                    wandb.log({
+                        "train/loss": loss.item(),
+                        "train/lr": scheduler.get_last_lr()[0],
+                        "train/epoch": epoch + (batch_idx / len(train_loader)),
+                        "train/step": global_step,
+                    }, step=global_step)
+
             # Update progress bar with current metrics
             pbar.set_postfix({
                 "loss": f"{loss.item():.4f}",
@@ -373,6 +423,13 @@ def main():
                 eval_metrics = evaluate_model(model, val_loader, device)
 
                 writer.add_scalar("eval/loss", eval_metrics["eval_loss"], global_step)
+
+                # W&B evaluation logging
+                if use_wandb:
+                    wandb.log({
+                        "eval/loss": eval_metrics["eval_loss"],
+                        "eval/step": global_step,
+                    }, step=global_step)
 
                 pbar.write(f"Step {global_step}: Eval loss = {eval_metrics['eval_loss']:.4f}")
 
@@ -414,6 +471,14 @@ def main():
         # End of epoch
         avg_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0
         pbar.write(f"Epoch {epoch+1} completed - avg loss: {avg_loss:.4f}")
+
+        # Log epoch summary to W&B
+        if use_wandb:
+            wandb.log({
+                "epoch/avg_loss": avg_loss,
+                "epoch/number": epoch + 1,
+            }, step=global_step)
+
         pbar.close()
 
     # Final save
@@ -431,6 +496,13 @@ def main():
 
     print(f"Training completed! Best eval loss: {best_eval_loss:.4f}")
     print(f"Models saved to: {output_dir}")
+
+    # Final W&B summary
+    if use_wandb:
+        wandb.summary["best_eval_loss"] = best_eval_loss
+        wandb.summary["total_epochs"] = args.epochs
+        wandb.summary["total_steps"] = global_step
+        wandb.finish()
 
     writer.close()
 

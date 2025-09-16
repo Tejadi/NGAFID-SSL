@@ -43,6 +43,9 @@ mkdir -p logs
 source ~/.bashrc  # Ensure conda is initialized
 conda activate bert-flight
 
+# Install wandb if not already installed
+pip install wandb --quiet
+
 # Option 2: If using specific conda path (uncomment if needed)
 # source ~/miniconda3/etc/profile.d/conda.sh
 # conda activate bert-flight
@@ -90,7 +93,9 @@ python train_bert_masked_regressor.py \
     --max_files_train 1000 \
     --max_files_val 200 \
     --warmup_steps 2000 \
-    --weight_decay 1e-5
+    --weight_decay 1e-5 \
+    --wandb_project "bert-flight-ssl" \
+    --wandb_run_name "$JOB_NAME"
 
 # Capture exit code
 EXIT_CODE=$?
