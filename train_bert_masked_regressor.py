@@ -65,13 +65,13 @@ def parse_args():
     # Model arguments
     parser.add_argument("--feat_dim", type=int, default=None,
                         help="Feature dimension (auto-detected if None)")
-    parser.add_argument("--hidden_size", type=int, default=512,
+    parser.add_argument("--hidden_size", type=int, default=1536,
                         help="BERT hidden size")
-    parser.add_argument("--encoder_layers", type=int, default=6,
+    parser.add_argument("--encoder_layers", type=int, default=12,
                         help="Number of BERT encoder layers")
-    parser.add_argument("--decoder_layers", type=int, default=3,
+    parser.add_argument("--decoder_layers", type=int, default=8,
                         help="Number of decoder layers")
-    parser.add_argument("--num_heads", type=int, default=8,
+    parser.add_argument("--num_heads", type=int, default=16,
                         help="Number of attention heads")
     parser.add_argument("--dropout", type=float, default=0.1,
                         help="Dropout rate")
@@ -174,6 +174,8 @@ def evaluate_model(model, dataloader, device, max_batches: int = 100) -> Dict[st
     """Evaluate model on validation data."""
     model.eval()
     total_loss = 0.0
+    total_mse_loss = 0.0
+    total_mae_loss = 0.0
     total_samples = 0
     total_masked_positions = 0
 
@@ -186,21 +188,29 @@ def evaluate_model(model, dataloader, device, max_batches: int = 100) -> Dict[st
             x_original = x_original.to(device)
             mask = mask.to(device)
 
-            loss, _ = model.compute_loss(x_masked, x_original, mask)
+            loss, mse_loss, mae_loss = model.compute_loss(x_masked, x_original, mask)
 
             # Count masked positions for per-position metrics
             masked_positions = (mask == 0).sum().item()
 
             total_loss += loss.item() * x_masked.size(0)
+            total_mse_loss += mse_loss.item() * x_masked.size(0)
+            total_mae_loss += mae_loss.item() * x_masked.size(0)
             total_samples += x_masked.size(0)
             total_masked_positions += masked_positions
 
     avg_loss = total_loss / total_samples if total_samples > 0 else float('inf')
-    avg_mse_per_position = avg_loss * total_samples / total_masked_positions if total_masked_positions > 0 else float('inf')
+    avg_mse_loss = total_mse_loss / total_samples if total_samples > 0 else float('inf')
+    avg_mae_loss = total_mae_loss / total_samples if total_samples > 0 else float('inf')
+    avg_mse_per_position = avg_mse_loss * total_samples / total_masked_positions if total_masked_positions > 0 else float('inf')
+    avg_mae_per_position = avg_mae_loss * total_samples / total_masked_positions if total_masked_positions > 0 else float('inf')
 
     return {
         "eval_loss": avg_loss,
+        "eval_mse_loss": avg_mse_loss,
+        "eval_mae_loss": avg_mae_loss,
         "eval_mse_per_position": avg_mse_per_position,
+        "eval_mae_per_position": avg_mae_per_position,
         "eval_masked_positions": total_masked_positions / total_samples if total_samples > 0 else 0
     }
 
@@ -377,6 +387,8 @@ def main():
     for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0.0
+        epoch_mse_loss = 0.0
+        epoch_mae_loss = 0.0
         epoch_samples = 0
 
         # Create progress bar for this epoch
@@ -394,7 +406,7 @@ def main():
 
             # Forward pass
             optimizer.zero_grad()
-            loss, _ = model.compute_loss(x_masked, x_original, mask)
+            loss, mse_loss, mae_loss = model.compute_loss(x_masked, x_original, mask)
 
             # Backward pass
             loss.backward()
@@ -404,17 +416,23 @@ def main():
 
             # Update metrics
             epoch_loss += loss.item() * x_masked.size(0)
+            epoch_mse_loss += mse_loss.item() * x_masked.size(0)
+            epoch_mae_loss += mae_loss.item() * x_masked.size(0)
             epoch_samples += x_masked.size(0)
 
             # Log training metrics
             if global_step % 100 == 0:
                 # Compute per-position metrics for current batch
                 masked_positions = (mask == 0).sum().item()
-                mse_per_position = loss.item() / masked_positions if masked_positions > 0 else 0
+                mse_per_position = mse_loss.item() / masked_positions if masked_positions > 0 else 0
+                mae_per_position = mae_loss.item() / masked_positions if masked_positions > 0 else 0
                 masking_ratio = masked_positions / mask.numel()
 
                 writer.add_scalar("train/loss", loss.item(), global_step)
+                writer.add_scalar("train/mse_loss", mse_loss.item(), global_step)
+                writer.add_scalar("train/mae_loss", mae_loss.item(), global_step)
                 writer.add_scalar("train/mse_per_position", mse_per_position, global_step)
+                writer.add_scalar("train/mae_per_position", mae_per_position, global_step)
                 writer.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step)
                 writer.add_scalar("train/masking_ratio", masking_ratio, global_step)
 
@@ -422,7 +440,10 @@ def main():
                 if use_wandb:
                     wandb.log({
                         "train/loss": loss.item(),
+                        "train/mse_loss": mse_loss.item(),
+                        "train/mae_loss": mae_loss.item(),
                         "train/mse_per_position": mse_per_position,
+                        "train/mae_per_position": mae_per_position,
                         "train/masking_ratio": masking_ratio,
                         "train/lr": scheduler.get_last_lr()[0],
                         "train/epoch": epoch + (batch_idx / len(train_loader)),
@@ -431,8 +452,9 @@ def main():
 
             # Update progress bar with current metrics
             pbar.set_postfix({
-                "loss": f"{loss.item():.4f}",
-                "avg_loss": f"{epoch_loss/(epoch_samples+1e-8):.4f}",
+                "mse": f"{mse_loss.item():.4f}",
+                "mae": f"{mae_loss.item():.4f}",
+                "avg_mse": f"{epoch_mse_loss/(epoch_samples+1e-8):.4f}",
                 "lr": f"{scheduler.get_last_lr()[0]:.2e}",
                 "step": global_step,
             })
@@ -443,14 +465,20 @@ def main():
                 eval_metrics = evaluate_model(model, val_loader, device)
 
                 writer.add_scalar("eval/loss", eval_metrics["eval_loss"], global_step)
+                writer.add_scalar("eval/mse_loss", eval_metrics["eval_mse_loss"], global_step)
+                writer.add_scalar("eval/mae_loss", eval_metrics["eval_mae_loss"], global_step)
                 writer.add_scalar("eval/mse_per_position", eval_metrics["eval_mse_per_position"], global_step)
+                writer.add_scalar("eval/mae_per_position", eval_metrics["eval_mae_per_position"], global_step)
                 writer.add_scalar("eval/masked_positions", eval_metrics["eval_masked_positions"], global_step)
 
                 # W&B evaluation logging
                 if use_wandb:
                     wandb.log({
                         "eval/loss": eval_metrics["eval_loss"],
+                        "eval/mse_loss": eval_metrics["eval_mse_loss"],
+                        "eval/mae_loss": eval_metrics["eval_mae_loss"],
                         "eval/mse_per_position": eval_metrics["eval_mse_per_position"],
+                        "eval/mae_per_position": eval_metrics["eval_mae_per_position"],
                         "eval/masked_positions": eval_metrics["eval_masked_positions"],
                         "eval/step": global_step,
                     }, step=global_step)

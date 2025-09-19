@@ -80,12 +80,12 @@ python train_bert_masked_regressor.py \
     --output_dir "$OUTPUT_DIR" \
     --seq_len 1024 \
     --batch_size 16 \
-    --epochs 10 \
-    --learning_rate 1e-4 \
-    --hidden_size 768 \
+    --epochs 18 \
+    --learning_rate 8e-5 \
+    --hidden_size 1536 \
     --encoder_layers 12 \
-    --decoder_layers 4 \
-    --num_heads 12 \
+    --decoder_layers 8 \
+    --num_heads 16 \
     --eval_interval 500 \
     --save_interval 2000 \
     --num_workers 4 \
