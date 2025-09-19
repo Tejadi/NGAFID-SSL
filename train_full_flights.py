@@ -165,7 +165,6 @@ def main():
             seq_len=seq_len,
             max_files=max_files_train,
             num_workers=2,  # Conservative for large sequences
-            pin_memory=torch.cuda.is_available(),
             seed=42
         )
 
@@ -176,7 +175,6 @@ def main():
             seq_len=seq_len,
             max_files=max_files_val,
             num_workers=2,
-            pin_memory=torch.cuda.is_available(),
             seed=42
         )
         print(f"✅ Created data loaders (train: ~{len(train_loader)} batches)")
