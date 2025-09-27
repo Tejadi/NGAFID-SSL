@@ -1,0 +1,21 @@
+{
+  "model_path": "/oscar/data/sbach/shared/ngafid/bert_h512_l6_1758224516/best_model.pt",
+  "data_dir": "/oscar/data/sbach/shared/ngafid/preprocessed_data/test",
+  "metrics": {
+    "mae": 2908.8111271800794,
+    "mse": 1176133820.5406528,
+    "rmse": 34294.80748656643
+  },
+  "model_architecture": {
+    "feat_dim": 44,
+    "hidden_size": 512,
+    "encoder_layers": 6,
+    "decoder_layers": 3,
+    "num_heads": 8
+  },
+  "evaluation_params": {
+    "masking_ratio": 0.6,
+    "mean_mask_length": 3,
+    "batch_size": 16
+  }
+}
