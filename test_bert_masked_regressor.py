@@ -15,6 +15,7 @@ from pathlib import Path
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 import json
+from typing import Dict, Tuple
 
 # Import model and dataset utilities
 from models.bert_masked_regressor import BertMaskedRegressor
@@ -123,52 +124,77 @@ def load_bert_model(checkpoint_path, device):
     return model, args
 
 
-def load_normalization_params(data_dir):
-    """Load or compute normalization parameters from the dataset."""
-    # Save to current working directory instead of data_dir due to permissions
-    norm_file = os.path.join(".", f"normalization_params_{os.path.basename(data_dir)}.npy")
+def normalize_data_robust(data: np.ndarray) -> Tuple[np.ndarray, Dict]:
+    """
+    Apply robust normalization using median and IQR, matching BERT training.
 
-    if os.path.exists(norm_file):
-        print(f"Loading normalization parameters from {norm_file}")
-        return np.load(norm_file, allow_pickle=True).item()
-    else:
-        print(f"Computing normalization parameters from {data_dir}")
-        # Load all flight data to compute normalization
-        flight_data, _ = load_flight_data(data_dir)
+    Args:
+        data: Flight data array of shape (seq_len, feat_dim)
 
-        # Reshape to (all_samples, features) for normalization
-        reshaped_data = flight_data.reshape(-1, flight_data.shape[-1])
+    Returns:
+        Tuple of (normalized_data, normalization_params)
+    """
+    normalized_data = np.copy(data)
+    norm_params = {'medians': [], 'iqrs': []}
 
-        # Remove any NaN/inf values
-        reshaped_data = reshaped_data[np.isfinite(reshaped_data).all(axis=1)]
+    for i in range(data.shape[1]):  # For each feature
+        feature_data = data[:, i]
 
-        norm_params = {
-            'mean': np.mean(reshaped_data, axis=0),
-            'std': np.std(reshaped_data, axis=0) + 1e-8  # Add small epsilon to avoid division by zero
-        }
+        # Use median and IQR for robust normalization (matching training)
+        median = np.median(feature_data)
+        q75, q25 = np.percentile(feature_data, [75, 25])
+        iqr = q75 - q25
 
-        # Save for future use in current directory
-        np.save(norm_file, norm_params)
-        print(f"Saved normalization parameters to {norm_file}")
+        norm_params['medians'].append(median)
+        norm_params['iqrs'].append(iqr)
 
-        return norm_params
+        # Avoid division by zero
+        if iqr > 1e-6:
+            normalized_data[:, i] = (feature_data - median) / iqr
+        else:
+            # If no variation, center around median
+            normalized_data[:, i] = feature_data - median
+
+    return normalized_data, norm_params
+
+def denormalize_data_robust(data: np.ndarray, norm_params: Dict) -> np.ndarray:
+    """
+    Denormalize data using stored median and IQR parameters.
+
+    Args:
+        data: Normalized data array
+        norm_params: Dictionary with 'medians' and 'iqrs' lists
+
+    Returns:
+        Denormalized data array
+    """
+    denormalized_data = np.copy(data)
+
+    for i in range(data.shape[1]):
+        median = norm_params['medians'][i]
+        iqr = norm_params['iqrs'][i]
+
+        if iqr > 1e-6:
+            denormalized_data[:, i] = data[:, i] * iqr + median
+        else:
+            denormalized_data[:, i] = data[:, i] + median
+
+    return denormalized_data
 
 
-def evaluate_bert_model(model, test_data, flight_ids, normalization_params,
+def evaluate_bert_model(model, test_data, flight_ids,
                        masking_ratio=0.6, mean_mask_length=3, batch_size=16,
                        device="cuda" if torch.cuda.is_available() else "cpu"):
     """
-    Evaluate BERT model on test data with proper loss normalization.
+    Evaluate BERT model on test data using robust normalization matching training.
 
+    Uses per-sequence robust normalization (median + IQR) just like during training.
     Returns metrics comparable to research papers by denormalizing before computing loss.
     """
     model.eval()
 
-    # Normalize test data using training statistics
-    test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
-
-    # Create dataset
-    test_dataset = TensorDataset(torch.FloatTensor(test_data_normalized), torch.LongTensor(flight_ids))
+    # Create dataset with original (unnormalized) data
+    test_dataset = TensorDataset(torch.FloatTensor(test_data), torch.LongTensor(flight_ids))
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     total_mae = 0
@@ -180,16 +206,21 @@ def evaluate_bert_model(model, test_data, flight_ids, normalization_params,
 
     with torch.no_grad():
         for data, batch_ids in tqdm(test_loader, desc="Evaluating BERT model", unit="batch"):
-            data = data.to(device)
-
-            # Apply masking similar to training
+            # Work with original data for this batch
             original_data = data.cpu().numpy()
-            masked_batch = []
+
+            # Process each sequence individually (as in training)
+            batch_orig_normalized = []
+            batch_recon_denormalized = []
             batch_masks = []
 
             for sequence, flight_id in zip(original_data, batch_ids):
+                # Step 1: Apply robust normalization to this sequence (matching training)
+                normalized_seq, norm_params = normalize_data_robust(sequence)
+
+                # Step 2: Apply masking to normalized sequence
                 _, masked_sequence, mask = mask_transform(
-                    sequence,
+                    normalized_seq,
                     masking_ratio=masking_ratio,
                     mean_mask_length=mean_mask_length,
                     mode='separate',
@@ -197,30 +228,34 @@ def evaluate_bert_model(model, test_data, flight_ids, normalization_params,
                     random_seed=int(flight_id)
                 )
                 masked_sequence = masked_sequence.numpy()
-                masked_batch.append(masked_sequence)
+
+                # Step 3: Forward pass through BERT model
+                masked_input = torch.FloatTensor(masked_sequence).unsqueeze(0).to(device)
+                reconstructed_normalized = model(masked_input).cpu().numpy().squeeze(0)
+
+                # Step 4: Denormalize reconstructed data back to original scale
+                reconstructed_original = denormalize_data_robust(reconstructed_normalized, norm_params)
+
+                # Store results
+                batch_orig_normalized.append(sequence)  # Keep original for loss computation
+                batch_recon_denormalized.append(reconstructed_original)
                 batch_masks.append(mask.numpy())
 
-            masked_data = np.stack(masked_batch, axis=0)
-            masked_data = torch.FloatTensor(masked_data).to(device)
+            # Convert to arrays
+            batch_orig = np.stack(batch_orig_normalized, axis=0)
+            batch_recon = np.stack(batch_recon_denormalized, axis=0)
 
-            # Forward pass through BERT model
-            reconstructed = model(masked_data)
-
-            # Denormalize both original and reconstructed data for proper loss computation
-            original_denorm = data.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
-            recon_denorm = reconstructed.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
-
-            # Compute normalized metrics (similar to autoencoder test)
-            mae = np.mean(np.abs(original_denorm - recon_denorm))
-            mse = np.mean((original_denorm - recon_denorm) ** 2)
+            # Compute metrics on original scale
+            mae = np.mean(np.abs(batch_orig - batch_recon))
+            mse = np.mean((batch_orig - batch_recon) ** 2)
 
             total_mae += mae
             total_mse += mse
             num_batches += 1
 
             # Store for visualization
-            all_orig.append(original_denorm)
-            all_recon.append(recon_denorm)
+            all_orig.append(batch_orig)
+            all_recon.append(batch_recon)
             all_masks.append(np.stack(batch_masks, axis=0))
 
     # Compute final metrics
@@ -263,11 +298,6 @@ def main():
     # Load trained model
     model, model_args = load_bert_model(args.model_path, device)
 
-    # Load normalization parameters
-    normalization_params = load_normalization_params(args.data_dir)
-    print(f"Normalization - Mean range: [{normalization_params['mean'].min():.4f}, {normalization_params['mean'].max():.4f}]")
-    print(f"Normalization - Std range: [{normalization_params['std'].min():.4f}, {normalization_params['std'].max():.4f}]")
-
     # Load test data
     print(f"Loading test data from {args.data_dir}")
     test_data, flight_ids = load_flight_data(args.data_dir)
@@ -278,13 +308,13 @@ def main():
     aircraft_counts = get_aircraft_counts(args.data_dir)
     print(f"Aircraft type counts: {aircraft_counts}")
 
-    # Evaluate model
-    print("Evaluating BERT model...")
+    # Evaluate model using robust normalization (matching training)
+    print("Evaluating BERT model with robust normalization...")
+    print("Using per-sequence median + IQR normalization (matching training)")
     metrics, orig_data, recon_data, masks = evaluate_bert_model(
         model=model,
         test_data=test_data,
         flight_ids=flight_ids,
-        normalization_params=normalization_params,
         masking_ratio=args.masking_ratio,
         mean_mask_length=args.mean_mask_length,
         batch_size=args.batch_size,
