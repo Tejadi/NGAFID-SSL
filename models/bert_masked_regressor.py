@@ -13,11 +13,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import BertModel, BertConfig
+from torch.utils.checkpoint import checkpoint
 from typing import Optional, Tuple
 
 
 class FlightBertEncoder(nn.Module):
-    """BERT encoder for flight time series data."""
+    """Memory-optimized BERT encoder for flight time series data with gradient checkpointing."""
 
     def __init__(
         self,
@@ -28,11 +29,13 @@ class FlightBertEncoder(nn.Module):
         intermediate_size: int = 3072,
         dropout: float = 0.1,
         max_position_embeddings: int = 512,
+        use_gradient_checkpointing: bool = True,
     ):
         super().__init__()
 
         self.feat_dim = feat_dim
         self.hidden_size = hidden_size
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         # Project flight features to BERT embedding dimension
         self.feature_projection = nn.Linear(feat_dim, hidden_size)
@@ -57,6 +60,10 @@ class FlightBertEncoder(nn.Module):
         self.bert = BertModel(config, add_pooling_layer=False)
         # Remove the word embeddings since we project features directly
         del self.bert.embeddings.word_embeddings
+
+        # Enable gradient checkpointing for memory efficiency
+        if self.use_gradient_checkpointing:
+            self.bert.gradient_checkpointing_enable()
 
     def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
@@ -100,7 +107,7 @@ class FlightBertEncoder(nn.Module):
 
 
 class FlightDecoder(nn.Module):
-    """Enhanced decoder to reconstruct flight data from BERT embeddings with skip connections and layer norm."""
+    """Memory-optimized decoder with gradient checkpointing, skip connections and layer norm."""
 
     def __init__(
         self,
@@ -109,6 +116,7 @@ class FlightDecoder(nn.Module):
         num_layers: int = 4,
         dropout: float = 0.1,
         use_skip_connections: bool = True,
+        use_gradient_checkpointing: bool = True,
     ):
         super().__init__()
 
@@ -116,6 +124,7 @@ class FlightDecoder(nn.Module):
         self.feat_dim = feat_dim
         self.num_layers = num_layers
         self.use_skip_connections = use_skip_connections
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         # Build decoder layers with skip connections and layer norm
         self.layers = nn.ModuleList()
@@ -183,7 +192,7 @@ class FlightDecoder(nn.Module):
 
     def forward(self, encoded_features: torch.Tensor) -> torch.Tensor:
         """
-        Decode BERT embeddings back to flight features with skip connections.
+        Decode BERT embeddings back to flight features with skip connections and optional checkpointing.
 
         Args:
             encoded_features: Encoded features (batch_size, seq_len, hidden_size)
@@ -195,21 +204,29 @@ class FlightDecoder(nn.Module):
 
         for i, layer in enumerate(self.layers[:-1]):  # All but final layer
             residual = x
-            x = layer(x)
+
+            # Use gradient checkpointing if enabled and training
+            if self.use_gradient_checkpointing and self.training:
+                x = checkpoint(layer, x, use_reentrant=False)
+            else:
+                x = layer(x)
 
             # Add skip connection if enabled and dimensions allow
             if self.use_skip_connections and i < len(self.skip_projections):
                 skip_proj = self.skip_projections[i]
-                x = x + skip_proj(residual)
+                if self.use_gradient_checkpointing and self.training:
+                    x = x + checkpoint(skip_proj, residual, use_reentrant=False)
+                else:
+                    x = x + skip_proj(residual)
 
-        # Final layer (no skip connection)
+        # Final layer (no skip connection or checkpointing)
         x = self.layers[-1](x)
 
         return x
 
 
 class BertMaskedRegressor(nn.Module):
-    """Complete BERT-based masked regression model for flight data."""
+    """Memory-optimized BERT-based masked regression model for flight data."""
 
     def __init__(
         self,
@@ -220,13 +237,17 @@ class BertMaskedRegressor(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.1,
         max_seq_len: int = 512,
+        use_gradient_checkpointing: bool = True,
+        use_mixed_precision: bool = True,
     ):
         super().__init__()
 
         self.feat_dim = feat_dim
         self.hidden_size = hidden_size
+        self.use_gradient_checkpointing = use_gradient_checkpointing
+        self.use_mixed_precision = use_mixed_precision
 
-        # BERT encoder
+        # BERT encoder with gradient checkpointing
         self.encoder = FlightBertEncoder(
             feat_dim=feat_dim,
             hidden_size=hidden_size,
@@ -234,14 +255,16 @@ class BertMaskedRegressor(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             max_position_embeddings=max_seq_len,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
 
-        # Decoder
+        # Decoder with gradient checkpointing
         self.decoder = FlightDecoder(
             hidden_size=hidden_size,
             feat_dim=feat_dim,
             num_layers=decoder_layers,
             dropout=dropout,
+            use_gradient_checkpointing=use_gradient_checkpointing,
         )
 
     def forward(
@@ -250,7 +273,7 @@ class BertMaskedRegressor(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
-        Forward pass: encode masked input and decode to reconstruct original.
+        Memory-optimized forward pass with optional checkpointing.
 
         Args:
             x_masked: Masked input data (batch_size, seq_len, feat_dim)
@@ -259,11 +282,14 @@ class BertMaskedRegressor(nn.Module):
         Returns:
             Reconstructed data (batch_size, seq_len, feat_dim)
         """
-        # Encode
-        encoded = self.encoder(x_masked, attention_mask)
-
-        # Decode
-        reconstructed = self.decoder(encoded)
+        # Encode with optional mixed precision
+        if self.use_mixed_precision and self.training:
+            with torch.cuda.amp.autocast():
+                encoded = self.encoder(x_masked, attention_mask)
+                reconstructed = self.decoder(encoded)
+        else:
+            encoded = self.encoder(x_masked, attention_mask)
+            reconstructed = self.decoder(encoded)
 
         return reconstructed
 
@@ -276,9 +302,10 @@ class BertMaskedRegressor(nn.Module):
         use_mae_loss: bool = False,
         loss_weight_mse: float = 1.0,
         loss_weight_mae: float = 0.1,
+        scaler: Optional[torch.cuda.amp.GradScaler] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Compute reconstruction loss on masked positions only.
+        Compute reconstruction loss with optional mixed precision.
 
         Args:
             x_masked: Masked input (batch_size, seq_len, feat_dim)
@@ -288,12 +315,17 @@ class BertMaskedRegressor(nn.Module):
             use_mae_loss: Whether to include MAE in the training loss
             loss_weight_mse: Weight for MSE loss component
             loss_weight_mae: Weight for MAE loss component (if used)
+            scaler: Optional GradScaler for mixed precision
 
         Returns:
             Tuple of (total_loss, mse_loss, mae_loss)
         """
-        # Forward pass
-        reconstructed = self.forward(x_masked, attention_mask)
+        # Forward pass with optional mixed precision
+        if self.use_mixed_precision and self.training and scaler is not None:
+            with torch.cuda.amp.autocast():
+                reconstructed = self.forward(x_masked, attention_mask)
+        else:
+            reconstructed = self.forward(x_masked, attention_mask)
 
         # Compute loss only on masked positions (where mask == 0)
         masked_positions = (mask == 0).float()
@@ -333,7 +365,7 @@ def count_parameters(model: nn.Module) -> int:
 
 
 if __name__ == "__main__":
-    # Test the scaled model for RTX A5000
+    # Test the memory-optimized model
     batch_size, seq_len, feat_dim = 2, 256, 44  # Realistic flight data dimensions
 
     model = BertMaskedRegressor(
@@ -343,6 +375,8 @@ if __name__ == "__main__":
         decoder_layers=8,
         num_heads=16,
         max_seq_len=seq_len,
+        use_gradient_checkpointing=True,
+        use_mixed_precision=True,
     )
 
     print(f"Model parameters: {count_parameters(model):,}")

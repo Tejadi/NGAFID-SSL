@@ -7,3 +7,6 @@ bert_masked_regressor_runs/
 real_flight_data/
 synthetic_bert_runs/
 synthetic_flight_data/
+results/
+logs/
+checkpoints/
