@@ -68,17 +68,20 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
 
             reconstructed = model(masked_data)
 
-            # Denormalize for evaluation (matching autoencoder benchmark)
-            original_denorm = data.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
-            recon_denorm = reconstructed.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
+            # Compute metrics on normalized values (as per experiment description)
+            original_norm = data.cpu().numpy()
+            recon_norm = reconstructed.cpu().numpy()
 
-            mae = np.mean(np.abs(original_denorm - recon_denorm))
-            mse = np.mean((original_denorm - recon_denorm) ** 2)
+            mae = np.mean(np.abs(original_norm - recon_norm))
+            mse = np.mean((original_norm - recon_norm) ** 2)
 
             total_mae += mae
             total_mse += mse
             num_batches += 1
 
+            # Denormalize for visualization only
+            original_denorm = original_norm * normalization_params['std'] + normalization_params['mean']
+            recon_denorm = recon_norm * normalization_params['std'] + normalization_params['mean']
             all_orig.append(original_denorm)
             all_recon.append(recon_denorm)
             all_masks.append(np.stack(batch_masks, axis=0))
@@ -137,16 +140,20 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
 
             reconstructed = model(masked_data)
 
-            original_denorm = data.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
-            recon_denorm = reconstructed.cpu().numpy() * normalization_params['std'] + normalization_params['mean']
+            # Compute metrics on normalized values (as per experiment description)
+            original_norm = data.cpu().numpy()
+            recon_norm = reconstructed.cpu().numpy()
 
-            mae = np.mean(np.abs(original_denorm - recon_denorm))
-            mse = np.mean((original_denorm - recon_denorm) ** 2)
+            mae = np.mean(np.abs(original_norm - recon_norm))
+            mse = np.mean((original_norm - recon_norm) ** 2)
 
             total_mae += mae
             total_mse += mse
             num_batches += 1
 
+            # Denormalize for visualization only
+            original_denorm = original_norm * normalization_params['std'] + normalization_params['mean']
+            recon_denorm = recon_norm * normalization_params['std'] + normalization_params['mean']
             all_orig.append(original_denorm)
             all_recon.append(recon_denorm)
             all_masks.append(np.stack(batch_masks, axis=0))
