@@ -79,8 +79,24 @@ def load_flight_data(flight_dir):
     return flights_array, flight_ids
 
 def load_model(model_path, input_dim, hidden_dim, device):
+    checkpoint = torch.load(model_path, map_location=device)
+
+    # Handle both checkpoint dict format and direct state_dict format
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    else:
+        state_dict = checkpoint
+
+    # Extract hidden_dim from checkpoint if available
+    # LSTM weight_hh has shape [hidden_size * 4, hidden_size]
+    if 'encoder.weight_hh_l0' in state_dict:
+        actual_hidden_dim = state_dict['encoder.weight_hh_l0'].shape[1]
+        if actual_hidden_dim != hidden_dim:
+            print(f"Warning: Provided hidden_dim={hidden_dim}, but checkpoint has hidden_dim={actual_hidden_dim}. Using {actual_hidden_dim}.")
+            hidden_dim = actual_hidden_dim
+
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(state_dict)
     model = model.to(device)
     model.eval()
     return model
