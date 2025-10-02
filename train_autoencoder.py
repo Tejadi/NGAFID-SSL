@@ -27,20 +27,23 @@ def train_autoencoder(
     wandb_run=None
 ):
     print("Computing normalization parameters...")
-    data_reshaped = train_data.reshape(-1, input_dim)
-    data_mean = np.mean(data_reshaped, axis=0)
-    data_std = np.std(data_reshaped, axis=0)
+    data_mean = np.mean(train_data, axis=(0, 1))
+    data_std = np.std(train_data, axis=(0, 1))
     
     data_std[data_std == 0] = 1.0
     
     train_data_normalized = (train_data - data_mean) / data_std
     val_data_normalized = (val_data - data_mean) / data_std
     print("Normalization parameters computed.")
-    
-    train_dataset = TensorDataset(torch.FloatTensor(train_data_normalized))
-    val_dataset = TensorDataset(torch.FloatTensor(val_data_normalized))
+
+    print("Creating training dataset...")
+    train_dataset = TensorDataset(torch.from_numpy(train_data_normalized).float())
+    print("Creating validation dataset...")
+    val_dataset = TensorDataset(torch.from_numpy(val_data_normalized).float())
+    print("Creating data loaders...")
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    print("Data loaders ready.")
     
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
     model = model.to(device)
@@ -145,9 +148,8 @@ def train_sequential_autoencoder(
 ):
 
     print("Computing normalization parameters...")
-    data_reshaped = train_data.reshape(-1, input_dim)
-    data_mean = np.mean(data_reshaped, axis=0)
-    data_std = np.std(data_reshaped, axis=0)
+    data_mean = np.mean(train_data, axis=(0, 1))
+    data_std = np.std(train_data, axis=(0, 1))
     
 
     data_std[data_std == 0] = 1.0
@@ -156,18 +158,21 @@ def train_sequential_autoencoder(
     train_data_normalized = (train_data - data_mean) / data_std
     val_data_normalized = (val_data - data_mean) / data_std
     print("Normalization parameters computed.")
-    
 
+    print("Creating training dataset...")
     train_dataset = TensorDataset(
-        torch.FloatTensor(train_data_normalized),
+        torch.from_numpy(train_data_normalized).float(),
         torch.LongTensor([sequence_length_map[id] for id in train_ids])
     )
+    print("Creating validation dataset...")
     val_dataset = TensorDataset(
-        torch.FloatTensor(val_data_normalized),
+        torch.from_numpy(val_data_normalized).float(),
         torch.LongTensor([sequence_length_map[id] for id in val_ids])
     )
+    print("Creating data loaders...")
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    print("Data loaders ready.")
     
     model = TimeSeriesAutoencoder(input_dim=input_dim, hidden_dim=hidden_dim)
     model = model.to(device)
@@ -300,7 +305,6 @@ if __name__ == "__main__":
 
     train_data, train_ids = load_flight_data(args.train_data_dir)
     val_data, val_ids = load_flight_data(args.val_data_dir)
-    sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
     input_dim = train_data.shape[2]
     
     if not args.disable_wandb:
@@ -330,6 +334,7 @@ if __name__ == "__main__":
         wandb_run = None
     
     if args.use_sequential:
+        sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
         trained_model, normalization_params = train_sequential_autoencoder(
             train_data=train_data,
             train_ids=train_ids,
