@@ -8,6 +8,31 @@ import argparse
 from tqdm import tqdm
 from utils import load_model, load_flight_data, plot_aircraft_type_comparison, plot_reconstructions, get_aircraft_counts, load_sequence_lengths, plot_sequential_reconstructions
 
+def infer_sequence_lengths(data, threshold=1e-6):
+    """
+    Infer sequence lengths from data by finding the last non-zero/non-padded timestep.
+    Assumes padding is done with zeros or very small values.
+
+    Args:
+        data: numpy array of shape (num_samples, seq_len, feat_dim)
+        threshold: values below this are considered padding
+
+    Returns:
+        dict mapping index to sequence length
+    """
+    sequence_lengths = {}
+    for idx in range(len(data)):
+        # Check for non-zero values across features at each timestep
+        non_zero_mask = np.abs(data[idx]).sum(axis=1) > threshold
+        if non_zero_mask.any():
+            # Find the last timestep with non-zero values
+            last_idx = np.where(non_zero_mask)[0][-1]
+            sequence_lengths[idx] = last_idx + 1
+        else:
+            # If all zeros, use full length
+            sequence_lengths[idx] = data.shape[1]
+    return sequence_lengths
+
 def evaluate_model(model, test_data, flight_ids, normalization_params, batch_size=32, masking_ratio=0.6, mean_mask_length=3,
                   device="cuda" if torch.cuda.is_available() else "cpu"):
 
@@ -80,15 +105,21 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
     
     return metrics, np.concatenate(all_orig), np.concatenate(all_recon), np.concatenate(all_masks)
 
-def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map, normalization_params, batch_size=32, 
-                            mask_length=10, start_point=0.5, device="cuda" if torch.cuda.is_available() else "cpu"):
+def evaluate_sequential_model(model, test_data, flight_ids, normalization_params, batch_size=32,
+                            masking_ratio=0.6, mean_mask_length=3, sequence_length_map=None,
+                            device="cuda" if torch.cuda.is_available() else "cpu"):
     model.eval()
-    
+
     test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
-    
+
+    # If sequence_length_map not provided, infer from data
+    if sequence_length_map is None:
+        print("No sequence length map provided, inferring from data...")
+        sequence_length_map = infer_sequence_lengths(test_data)
+
     test_dataset = TensorDataset(
         torch.FloatTensor(test_data_normalized),
-        torch.LongTensor([sequence_length_map[id] for id in flight_ids])
+        torch.LongTensor([sequence_length_map.get(id, test_data.shape[1]) for id in flight_ids])
     )
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
@@ -102,11 +133,16 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
     with torch.no_grad():
         for data, seq_lengths in tqdm(test_loader, desc="Evaluating", unit="batch"):
             data = data.to(device)
-            
+
             original_data = data.cpu().numpy()
             masked_batch = []
             batch_masks = []
             for sequence, seq_len in zip(original_data, seq_lengths):
+                # Use masking_ratio to determine mask length as a fraction of sequence
+                mask_length = max(1, int(seq_len.item() * masking_ratio))
+                # Start point is at a fraction of the sequence
+                start_point = 0.5  # Middle of sequence
+
                 _, masked_sequence, mask = sequential_mask_transform(
                     sequence,
                     starting_point=start_point,
@@ -116,10 +152,10 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
                 masked_sequence = masked_sequence.numpy()
                 masked_batch.append(masked_sequence)
                 batch_masks.append(mask.numpy())
-            
+
             masked_data = np.stack(masked_batch, axis=0)
             masked_data = torch.FloatTensor(masked_data).to(device)
-            
+
             reconstructed = model(masked_data)
 
             # Compute metrics on normalized values (as per experiment description)
@@ -216,8 +252,9 @@ def evaluate_model_per_feature(model, test_data, flight_ids, normalization_param
 
     return per_feature_mse, per_feature_mae, per_feature_rmse
 
-def evaluate_sequential_model_per_feature(model, test_data, flight_ids, sequence_length_map, normalization_params, batch_size=32,
-                                          mask_length=10, start_point=0.5, device="cuda" if torch.cuda.is_available() else "cpu"):
+def evaluate_sequential_model_per_feature(model, test_data, flight_ids, normalization_params, batch_size=32,
+                                          masking_ratio=0.6, mean_mask_length=3, sequence_length_map=None,
+                                          device="cuda" if torch.cuda.is_available() else "cpu"):
     """
     Evaluate sequential model and compute per-feature metrics.
     Returns MSE and MAE for each feature individually.
@@ -226,9 +263,13 @@ def evaluate_sequential_model_per_feature(model, test_data, flight_ids, sequence
 
     test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
 
+    # If sequence_length_map not provided, infer from data
+    if sequence_length_map is None:
+        sequence_length_map = infer_sequence_lengths(test_data)
+
     test_dataset = TensorDataset(
         torch.FloatTensor(test_data_normalized),
-        torch.LongTensor([sequence_length_map[id] for id in flight_ids])
+        torch.LongTensor([sequence_length_map.get(id, test_data.shape[1]) for id in flight_ids])
     )
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -247,6 +288,11 @@ def evaluate_sequential_model_per_feature(model, test_data, flight_ids, sequence
             masked_batch = []
             batch_masks = []
             for sequence, seq_len in zip(original_data, seq_lengths):
+                # Use masking_ratio to determine mask length as a fraction of sequence
+                mask_length = max(1, int(seq_len.item() * masking_ratio))
+                # Start point is at a fraction of the sequence
+                start_point = 0.5  # Middle of sequence
+
                 _, masked_sequence, mask = sequential_mask_transform(
                     sequence,
                     starting_point=start_point,
@@ -324,32 +370,17 @@ if __name__ == "__main__":
     parser.add_argument('--output_csv', type=str, default='per_feature_metrics.csv',
                       help='Output CSV file for per-feature metrics (default: per_feature_metrics.csv)')
 
-    # Create mutually exclusive argument groups for sequential and random masking
-    sequential_group = parser.add_argument_group('Sequential masking parameters')
-    sequential_group.add_argument('--sequence_length_csv', type=str,
-                      help='Path to CSV file containing flight_id to sequence_length mapping')
-    sequential_group.add_argument('--mask_length', type=int,
-                      help='Length of sequential mask')
-    sequential_group.add_argument('--start_point', type=float,
-                      help='Starting point for sequential mask as fraction of sequence length')
-    
-    random_group = parser.add_argument_group('Random masking parameters')
-    random_group.add_argument('--masking_ratio', type=float,
-                      help='Proportion of input to mask for random masking')
-    random_group.add_argument('--mean_mask_length', type=int,
-                      help='Average length of masking subsequences for random masking')
+    # Masking parameters (used for both random and sequential modes)
+    parser.add_argument('--masking_ratio', type=float, default=0.6,
+                      help='Proportion of sequence to mask (default: 0.6)')
+    parser.add_argument('--mean_mask_length', type=int, default=3,
+                      help='Average length of masking subsequences for random masking (default: 3)')
+
+    # Optional: sequence length CSV for more accurate sequential masking
+    parser.add_argument('--sequence_length_csv', type=str, default=None,
+                      help='Optional: Path to CSV file containing flight_id to sequence_length mapping. If not provided, lengths will be inferred from data.')
     
     args = parser.parse_args()
-    
-
-    if args.use_sequential:
-        if any(param is None for param in [args.sequence_length_csv, args.mask_length, args.start_point]):
-            parser.error("When using sequential masking (--use_sequential), the following arguments are required: "
-                        "--sequence_length_csv, --mask_length, --start_point")
-    else:
-        if any(param is None for param in [args.masking_ratio, args.mean_mask_length]):
-            parser.error("When using random masking (default), the following arguments are required: "
-                        "--masking_ratio, --mean_mask_length")
     
     print("Analyzing aircraft types in the data directory...")
     aircraft_counts = get_aircraft_counts(args.data_dir)
@@ -365,17 +396,22 @@ if __name__ == "__main__":
     model = load_model(args.model_path, input_dim, args.hidden_dim, device)
     
     print("Evaluating model...")
-    if args.use_sequential:
+
+    # Load sequence lengths if CSV is provided
+    sequence_length_map = None
+    if args.use_sequential and args.sequence_length_csv:
         sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
+
+    if args.use_sequential:
         metrics, orig_data, recon_data, masks = evaluate_sequential_model(
             model,
             test_data,
             flight_ids,
-            sequence_length_map,
             normalization_params=normalization_params,
             batch_size=args.batch_size,
-            mask_length=args.mask_length,
-            start_point=args.start_point,
+            masking_ratio=args.masking_ratio,
+            mean_mask_length=args.mean_mask_length,
+            sequence_length_map=sequence_length_map,
             device=device
         )
     else:
@@ -402,16 +438,15 @@ if __name__ == "__main__":
         print("="*60)
 
         if args.use_sequential:
-            sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
             per_feat_mse, per_feat_mae, per_feat_rmse = evaluate_sequential_model_per_feature(
                 model,
                 test_data,
                 flight_ids,
-                sequence_length_map,
                 normalization_params=normalization_params,
                 batch_size=args.batch_size,
-                mask_length=args.mask_length,
-                start_point=args.start_point,
+                masking_ratio=args.masking_ratio,
+                mean_mask_length=args.mean_mask_length,
+                sequence_length_map=sequence_length_map,
                 device=device
             )
         else:
@@ -474,13 +509,18 @@ if __name__ == "__main__":
     else:
         print("\nGenerating reconstruction plots...")
         if args.use_sequential:
+            # Calculate mask_length and start_point for visualization
+            avg_seq_len = np.mean([sequence_length_map.get(id, test_data.shape[1]) for id in flight_ids])
+            mask_length = max(1, int(avg_seq_len * args.masking_ratio))
+            start_point = 0.5
+
             plot_sequential_reconstructions(
                 orig_data,
                 recon_data,
                 flight_ids,
                 feature_indices=[34],
-                start_point=args.start_point,
-                mask_length=args.mask_length,
+                start_point=start_point,
+                mask_length=mask_length,
                 sequence_length_csv=args.sequence_length_csv,
                 num_samples=5
             )
