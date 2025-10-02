@@ -8,6 +8,7 @@ import argparse
 import os
 import time
 import json
+import gc
 from typing import Dict, Any, Optional, List
 
 # Set CUDA memory allocation configuration for better memory management
@@ -206,7 +207,8 @@ class GlobalNormalizedFlightDataset(LocalFlightDataset):
         """
         if not self.use_random_masking:
             # Use parent's iterator if not using random masking
-            return super().__iter__()
+            yield from super().__iter__()
+            return
 
         # Custom iterator with random masking
         worker_info = torch.utils.data.get_worker_info()
@@ -391,6 +393,11 @@ def evaluate_model(model, dataloader, device, max_batches: int = 50) -> Dict[str
             total_samples += x_masked.size(0)
             total_masked_positions += masked_positions
 
+    # Clear CUDA cache after evaluation to prevent memory buildup
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        gc.collect()
+
     avg_loss = total_loss / total_samples if total_samples > 0 else float('inf')
     avg_mse_loss = total_mse_loss / total_samples if total_samples > 0 else float('inf')
     avg_mae_loss = total_mae_loss / total_samples if total_samples > 0 else float('inf')
@@ -408,6 +415,16 @@ def evaluate_model(model, dataloader, device, max_batches: int = 50) -> Dict[str
 
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Train BERT masked regressor on full flights")
+    parser.add_argument("--use_fixed_masking", action="store_true",
+                        help="Use fixed masking ratio and mean mask length instead of random sampling")
+    parser.add_argument("--masking_ratio", type=float, default=0.5,
+                        help="Fixed masking ratio (default: 0.5, only used with --use_fixed_masking)")
+    parser.add_argument("--mean_mask_length", type=int, default=60,
+                        help="Fixed mean mask length (default: 60, only used with --use_fixed_masking)")
+    args = parser.parse_args()
+
     # Memory-optimized configuration for Oscar cluster training
     print("🚀 Starting Memory-Optimized BERT Flight Training")
     print("=" * 60)
@@ -493,13 +510,26 @@ def main():
         print("⚠️  Training will continue without global normalization")
         normalization_params = None
 
-    # Create data loaders with global normalization and random masking
-    print("📁 Creating data loaders with global normalization and random masking...")
-    masking_ratios = [0.2, 0.5, 0.8]
-    mean_mask_lengths = [5, 60]
-    print(f"🎲 Training will use random masking: {len(masking_ratios)} ratios × {len(mean_mask_lengths)} lengths = {len(masking_ratios) * len(mean_mask_lengths)} combinations")
-    print(f"   Masking ratios: {masking_ratios}")
-    print(f"   Mean mask lengths: {mean_mask_lengths}")
+    # Create data loaders with global normalization
+    if args.use_fixed_masking:
+        print(f"📁 Creating data loaders with FIXED masking...")
+        print(f"   Masking ratio: {args.masking_ratio}")
+        print(f"   Mean mask length: {args.mean_mask_length}")
+        use_random_masking = False
+        masking_ratio = args.masking_ratio
+        mean_mask_length = args.mean_mask_length
+        masking_ratios = [args.masking_ratio]
+        mean_mask_lengths = [args.mean_mask_length]
+    else:
+        print("📁 Creating data loaders with RANDOM masking...")
+        masking_ratios = [0.2, 0.5, 0.8]
+        mean_mask_lengths = [5, 60]
+        print(f"🎲 Training will use random masking: {len(masking_ratios)} ratios × {len(mean_mask_lengths)} lengths = {len(masking_ratios) * len(mean_mask_lengths)} combinations")
+        print(f"   Masking ratios: {masking_ratios}")
+        print(f"   Mean mask lengths: {mean_mask_lengths}")
+        use_random_masking = True
+        masking_ratio = 0.6  # Default for fallback
+        mean_mask_length = 3  # Default for fallback
 
     try:
         train_loader = create_global_normalized_dataloader(
@@ -511,7 +541,9 @@ def main():
             max_files=max_files_train,
             num_workers=1,  # Reduced for memory efficiency
             seed=42,
-            use_random_masking=True,  # Enable random masking for training
+            use_random_masking=use_random_masking,
+            masking_ratio=masking_ratio,
+            mean_mask_length=mean_mask_length,
             masking_ratios=masking_ratios,
             mean_mask_lengths=mean_mask_lengths
         )
@@ -641,10 +673,13 @@ def main():
                     "total_params": total_params,
                     "normalization": "global_mean_std" if normalization_params else "per_flight_robust",
                     "feat_dim": feat_dim,
-                    "random_masking": True,
+                    "use_fixed_masking": args.use_fixed_masking,
+                    "random_masking": use_random_masking,
                     "masking_ratios": masking_ratios,
                     "mean_mask_lengths": mean_mask_lengths,
                     "num_masking_combinations": len(masking_ratios) * len(mean_mask_lengths),
+                    "train_masking_ratio": masking_ratio if args.use_fixed_masking else "random",
+                    "train_mean_mask_length": mean_mask_length if args.use_fixed_masking else "random",
                     "val_masking_ratio": 0.6,
                     "val_mean_mask_length": 3,
                     "gradient_accumulation_steps": gradient_accumulation_steps,
@@ -852,6 +887,9 @@ def main():
 
                 pbar.write(f"📊 Step {global_step}: Eval MSE = {eval_metrics['eval_mse_loss']:.4f}, MAE = {eval_metrics['eval_mae_loss']:.4f}")
 
+                # Return to training mode
+                model.train()
+
                 # Save best model
                 if eval_metrics["eval_loss"] < best_eval_loss:
                     best_eval_loss = eval_metrics["eval_loss"]
@@ -889,6 +927,11 @@ def main():
             if accumulation_step % gradient_accumulation_steps != 0:
                 # Don't increment global_step here - only after actual optimizer step
                 pass
+
+        # Clear CUDA cache at the end of each epoch to prevent memory buildup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
 
         # End of epoch summary
         avg_epoch_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0

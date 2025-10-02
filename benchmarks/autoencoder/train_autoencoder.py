@@ -3,11 +3,12 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-from benchmarks.autoencoder.autoencoder import TimeSeriesAutoencoder
+from autoencoder import TimeSeriesAutoencoder
 import argparse
-from datasets.transformation_dataset import mask_transform, sequential_mask_transform
+from ngafid_datasets.transformation_dataset import mask_transform, sequential_mask_transform
 from tqdm import tqdm
 import wandb
+import os
 from utils import load_flight_data, load_sequence_lengths
 
 def train_autoencoder(
@@ -23,10 +24,14 @@ def train_autoencoder(
     device="cuda" if torch.cuda.is_available() else "cpu",
     wandb_run=None
 ):
-    print("Computing normalization parameters...")
+    print(f"Computing normalization parameters for data with shape: {train_data.shape}")
+    print(f"Total size in GB: {train_data.nbytes / 1e9:.2f} GB")
     data_reshaped = train_data.reshape(-1, input_dim)
+    print("Data reshaped, computing mean...")
     data_mean = np.mean(data_reshaped, axis=0)
+    print("Mean computed, computing std...")
     data_std = np.std(data_reshaped, axis=0)
+    print("Std computed.")
     
     data_std[data_std == 0] = 1.0
     
@@ -141,10 +146,14 @@ def train_sequential_autoencoder(
     wandb_run=None
 ):
 
-    print("Computing normalization parameters...")
+    print(f"Computing normalization parameters for data with shape: {train_data.shape}")
+    print(f"Total size in GB: {train_data.nbytes / 1e9:.2f} GB")
     data_reshaped = train_data.reshape(-1, input_dim)
+    print("Data reshaped, computing mean...")
     data_mean = np.mean(data_reshaped, axis=0)
+    print("Mean computed, computing std...")
     data_std = np.std(data_reshaped, axis=0)
+    print("Std computed.")
     
 
     data_std[data_std == 0] = 1.0
@@ -280,6 +289,8 @@ if __name__ == "__main__":
                       help='Disable Weights & Biases logging')
     parser.add_argument('--use_sequential', action='store_true',
                       help='Use sequential masking instead of random masking')
+    parser.add_argument('--checkpoint_dir', type=str, default='.',
+                      help='Directory to save model checkpoints (default: current directory)')
     args = parser.parse_args()
 
     if args.use_sequential:
@@ -297,7 +308,12 @@ if __name__ == "__main__":
 
     train_data, train_ids = load_flight_data(args.train_data_dir)
     val_data, val_ids = load_flight_data(args.val_data_dir)
-    sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
+
+    if args.use_sequential:
+        sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
+    else:
+        sequence_length_map = None
+
     input_dim = train_data.shape[2]
     
     if not args.disable_wandb:
@@ -356,11 +372,17 @@ if __name__ == "__main__":
             wandb_run=wandb_run
         )
     
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+
     model_name = "trained_sequential_autoencoder.pth" if args.use_sequential else "trained_autoencoder.pth"
-    torch.save(trained_model.state_dict(), model_name)
-    
+    model_path = os.path.join(args.checkpoint_dir, model_name)
+    torch.save(trained_model.state_dict(), model_path)
+    print(f"Model saved to {model_path}")
+
     norm_params_name = "sequential_normalization_params.npy" if args.use_sequential else "normalization_params.npy"
-    np.save(norm_params_name, normalization_params)
-    
+    norm_params_path = os.path.join(args.checkpoint_dir, norm_params_name)
+    np.save(norm_params_path, normalization_params)
+    print(f"Normalization parameters saved to {norm_params_path}")
+
     if wandb_run is not None:
         wandb.finish() 

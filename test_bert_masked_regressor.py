@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+import pandas as pd
+import os
 from torch.utils.data import DataLoader, TensorDataset
 from ngafid_datasets.transformation_dataset import mask_transform, sequential_mask_transform
 import argparse
@@ -170,6 +172,159 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
 
     return metrics, np.concatenate(all_orig), np.concatenate(all_recon), np.concatenate(all_masks)
 
+def evaluate_model_per_feature(model, test_data, flight_ids, normalization_params, batch_size=32, masking_ratio=0.5, mean_mask_length=60,
+                                device="cuda" if torch.cuda.is_available() else "cpu"):
+    """
+    Evaluate model and compute per-feature metrics.
+    Returns MSE and MAE for each feature individually.
+    """
+    model.eval()
+
+    test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
+
+    test_dataset = TensorDataset(torch.FloatTensor(test_data_normalized), torch.LongTensor(flight_ids))
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    feat_dim = test_data.shape[2]
+
+    # Accumulate per-feature errors
+    per_feature_mse = np.zeros(feat_dim)
+    per_feature_mae = np.zeros(feat_dim)
+    per_feature_samples = np.zeros(feat_dim)
+
+    with torch.no_grad():
+        for data, batch_ids in tqdm(test_loader, desc="Evaluating per-feature metrics", unit="batch"):
+            data = data.to(device)
+
+            original_data = data.cpu().numpy()
+            masked_batch = []
+            batch_masks = []
+            for sequence, flight_id in zip(original_data, batch_ids):
+                _, masked_sequence, mask = mask_transform(
+                    sequence,
+                    masking_ratio=masking_ratio,
+                    mean_mask_length=mean_mask_length,
+                    mode='separate',
+                    distribution='geometric',
+                    random_seed=int(flight_id)
+                )
+                masked_sequence = masked_sequence.numpy()
+                masked_batch.append(masked_sequence)
+                batch_masks.append(mask.numpy())
+
+            masked_data = np.stack(masked_batch, axis=0)
+            masked_data = torch.FloatTensor(masked_data).to(device)
+
+            reconstructed = model(masked_data)
+
+            # Compute metrics on normalized values
+            original_norm = data.cpu().numpy()
+            recon_norm = reconstructed.cpu().numpy()
+
+            # Compute per-feature metrics
+            # Shape: (batch_size, seq_len, feat_dim)
+            for feat_idx in range(feat_dim):
+                feat_errors = original_norm[:, :, feat_idx] - recon_norm[:, :, feat_idx]
+                per_feature_mse[feat_idx] += np.sum(feat_errors ** 2)
+                per_feature_mae[feat_idx] += np.sum(np.abs(feat_errors))
+                per_feature_samples[feat_idx] += original_norm[:, :, feat_idx].size
+
+    # Average over all samples
+    per_feature_mse = per_feature_mse / per_feature_samples
+    per_feature_mae = per_feature_mae / per_feature_samples
+    per_feature_rmse = np.sqrt(per_feature_mse)
+
+    return per_feature_mse, per_feature_mae, per_feature_rmse
+
+def evaluate_sequential_model_per_feature(model, test_data, flight_ids, sequence_length_map, normalization_params, batch_size=32,
+                                          mask_length=10, start_point=0.5, device="cuda" if torch.cuda.is_available() else "cpu"):
+    """
+    Evaluate sequential model and compute per-feature metrics.
+    Returns MSE and MAE for each feature individually.
+    """
+    model.eval()
+
+    test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
+
+    test_dataset = TensorDataset(
+        torch.FloatTensor(test_data_normalized),
+        torch.LongTensor([sequence_length_map[id] for id in flight_ids])
+    )
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    feat_dim = test_data.shape[2]
+
+    # Accumulate per-feature errors
+    per_feature_mse = np.zeros(feat_dim)
+    per_feature_mae = np.zeros(feat_dim)
+    per_feature_samples = np.zeros(feat_dim)
+
+    with torch.no_grad():
+        for data, seq_lengths in tqdm(test_loader, desc="Evaluating per-feature metrics", unit="batch"):
+            data = data.to(device)
+
+            original_data = data.cpu().numpy()
+            masked_batch = []
+            batch_masks = []
+            for sequence, seq_len in zip(original_data, seq_lengths):
+                _, masked_sequence, mask = sequential_mask_transform(
+                    sequence,
+                    starting_point=start_point,
+                    n=mask_length,
+                    sequence_length=seq_len.item()
+                )
+                masked_sequence = masked_sequence.numpy()
+                masked_batch.append(masked_sequence)
+                batch_masks.append(mask.numpy())
+
+            masked_data = np.stack(masked_batch, axis=0)
+            masked_data = torch.FloatTensor(masked_data).to(device)
+
+            reconstructed = model(masked_data)
+
+            # Compute metrics on normalized values
+            original_norm = data.cpu().numpy()
+            recon_norm = reconstructed.cpu().numpy()
+
+            # Compute per-feature metrics
+            # Shape: (batch_size, seq_len, feat_dim)
+            for feat_idx in range(feat_dim):
+                feat_errors = original_norm[:, :, feat_idx] - recon_norm[:, :, feat_idx]
+                per_feature_mse[feat_idx] += np.sum(feat_errors ** 2)
+                per_feature_mae[feat_idx] += np.sum(np.abs(feat_errors))
+                per_feature_samples[feat_idx] += original_norm[:, :, feat_idx].size
+
+    # Average over all samples
+    per_feature_mse = per_feature_mse / per_feature_samples
+    per_feature_mae = per_feature_mae / per_feature_samples
+    per_feature_rmse = np.sqrt(per_feature_mse)
+
+    return per_feature_mse, per_feature_mae, per_feature_rmse
+
+def get_feature_names(data_dir):
+    """
+    Extract feature names from the first CSV file in the data directory.
+    """
+    # Try to find a sample CSV file
+    csv_files = []
+    for root, dirs, files in os.walk(data_dir):
+        csv_files = [os.path.join(root, f) for f in files if f.endswith('.csv') and
+                     not any(name in f.lower() for name in ['aircraft_types', 'events', 'flight_ids', 'splits', 'sequence_length'])]
+        if csv_files:
+            break
+
+    if not csv_files:
+        return None
+
+    # Read the first CSV to get column names
+    try:
+        df = pd.read_csv(csv_files[0], nrows=0)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        return numeric_cols
+    except Exception as e:
+        print(f"Warning: Could not extract feature names: {e}")
+        return None
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Test trained BERT masked regressor on flight data')
     parser.add_argument('--data_dir', type=str, required=True,
@@ -192,6 +347,10 @@ if __name__ == "__main__":
                       help='Batch size (default: 32)')
     parser.add_argument('--use_sequential', action='store_true',
                       help='Use sequential masking instead of random masking')
+    parser.add_argument('--per_feature_analysis', action='store_true',
+                      help='Compute and save per-feature MSE and MAE metrics to CSV')
+    parser.add_argument('--output_csv', type=str, default='per_feature_metrics.csv',
+                      help='Output CSV file for per-feature metrics (default: per_feature_metrics.csv)')
 
     sequential_group = parser.add_argument_group('Sequential masking parameters')
     sequential_group.add_argument('--sequence_length_csv', type=str,
@@ -268,10 +427,83 @@ if __name__ == "__main__":
             device=device
         )
 
-    print("\nTest Metrics:")
+    print("\nTest Metrics (Overall):")
     print(f"MAE: {metrics['mae']:.6f}")
     print(f"MSE: {metrics['mse']:.6f}")
     print(f"RMSE: {metrics['rmse']:.6f}")
+
+    # Per-feature analysis
+    if args.per_feature_analysis:
+        print("\n" + "="*60)
+        print("Computing per-feature metrics...")
+        print("="*60)
+
+        if args.use_sequential:
+            sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
+            per_feat_mse, per_feat_mae, per_feat_rmse = evaluate_sequential_model_per_feature(
+                model,
+                test_data,
+                flight_ids,
+                sequence_length_map,
+                normalization_params=normalization_params,
+                batch_size=args.batch_size,
+                mask_length=args.mask_length,
+                start_point=args.start_point,
+                device=device
+            )
+        else:
+            per_feat_mse, per_feat_mae, per_feat_rmse = evaluate_model_per_feature(
+                model,
+                test_data,
+                flight_ids,
+                normalization_params=normalization_params,
+                batch_size=args.batch_size,
+                masking_ratio=args.masking_ratio,
+                mean_mask_length=args.mean_mask_length,
+                device=device
+            )
+
+        # Get feature names
+        feature_names = get_feature_names(args.data_dir)
+        if feature_names is None or len(feature_names) != feat_dim:
+            print("Warning: Could not extract feature names, using indices instead")
+            feature_names = [f"feature_{i}" for i in range(feat_dim)]
+
+        # Create results dataframe
+        results_df = pd.DataFrame({
+            'feature_index': list(range(feat_dim)),
+            'feature_name': feature_names,
+            'mse': per_feat_mse,
+            'mae': per_feat_mae,
+            'rmse': per_feat_rmse
+        })
+
+        # Sort by MSE to see best/worst features
+        results_df_sorted = results_df.sort_values('mse')
+
+        # Save to CSV
+        results_df_sorted.to_csv(args.output_csv, index=False)
+        print(f"\n✓ Per-feature metrics saved to: {args.output_csv}")
+
+        # Print summary statistics
+        print("\nPer-Feature Metrics Summary:")
+        print(f"{'Feature':<30} {'Index':<8} {'MSE':<12} {'MAE':<12} {'RMSE':<12}")
+        print("-" * 80)
+
+        # Print top 10 best features (lowest MSE)
+        print("\nTop 10 Best Reconstructed Features (Lowest MSE):")
+        for idx, row in results_df_sorted.head(10).iterrows():
+            print(f"{row['feature_name']:<30} {int(row['feature_index']):<8} {row['mse']:<12.6f} {row['mae']:<12.6f} {row['rmse']:<12.6f}")
+
+        print("\nTop 10 Worst Reconstructed Features (Highest MSE):")
+        for idx, row in results_df_sorted.tail(10).iterrows():
+            print(f"{row['feature_name']:<30} {int(row['feature_index']):<8} {row['mse']:<12.6f} {row['mae']:<12.6f} {row['rmse']:<12.6f}")
+
+        print(f"\nOverall Statistics:")
+        print(f"  Mean MSE across features: {per_feat_mse.mean():.6f}")
+        print(f"  Mean MAE across features: {per_feat_mae.mean():.6f}")
+        print(f"  Std MSE across features: {per_feat_mse.std():.6f}")
+        print(f"  Std MAE across features: {per_feat_mae.std():.6f}")
 
     print("\nGenerating reconstruction plots...")
     if args.use_sequential:
