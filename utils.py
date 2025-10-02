@@ -59,18 +59,23 @@ def load_flight_data(flight_dir):
     if not csv_files:
         raise ValueError(f"No CSV files found in {flight_dir}")
     
-    flights = []
+    # First pass: get dimensions from first file
+    first_flight = pd.read_csv(csv_files[0]).values
+    num_flights = len(csv_files)
+    seq_len, num_features = first_flight.shape
+
+    # Pre-allocate array
+    flights_array = np.empty((num_flights, seq_len, num_features), dtype=first_flight.dtype)
     flight_ids = []
-    for path in tqdm(csv_files, desc='Loading flight data'):
+
+    for idx, path in enumerate(tqdm(csv_files, desc='Loading flight data')):
         filename = path.name
         flight_id = int(filename.split('flight_')[1].split('.csv')[0])
         flight_ids.append(flight_id)
-        
+
         flight = pd.read_csv(path)
-        flight_array = flight.values
-        flights.append(flight_array)
-    
-    flights_array = np.stack(flights, axis=0)
+        flights_array[idx] = flight.values
+
     return flights_array, flight_ids
 
 def load_model(model_path, input_dim, hidden_dim, device):
