@@ -10,3 +10,6 @@ runs/
 5_5_model/
 05_60/
 sequential_masking/
+checkpoints/
+logs/
+results/
