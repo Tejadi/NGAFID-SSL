@@ -263,30 +263,6 @@ tail -f logs/bert_training_*.err
 
 See `CLUSTER_TRAINING_GUIDE.md` for detailed cluster setup instructions.
 
-## Results
-
-### Missing Data Reconstruction (Masked Feature Prediction)
-
-| Model | Mean Absolute Error | Mean Squared Error |
-|-------|--------------------|--------------------|
-| BERT Masked Regressor | **0.42** | **0.58** |
-| Transformer Autoencoder | 0.46 | 0.62 |
-| SimCLR + Regression Head | 4.44 | 25.50 |
-
-### Aircraft Classification
-
-#### Airframe Model Classification
-| Model | Accuracy |
-|-------|----------|
-| ConvMHSA | **0.99** |
-| SimCLR + Classifier | 0.82 |
-
-#### Airframe Class Classification
-| Model | Accuracy |
-|-------|----------|
-| ConvMHSA | **1.00** |
-| SimCLR + Classifier | 0.30 |
-
 ## Key Features
 
 - **Memory-Efficient Training**: Gradient checkpointing and 8-bit optimizers for long sequences
