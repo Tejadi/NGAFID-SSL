@@ -1,4 +1,4 @@
-# 🚀 How to Run BERT Flight Training on Oscar
+#  How to Run BERT Flight Training
 
 ## Simple Command
 
@@ -21,7 +21,7 @@ That's it! The script is fully configured and ready to go.
 ## Training Configuration
 
 - **Model**: 249M parameters (1536 hidden, 12 encoder layers, 8 decoder layers)
-- **Data**: `/oscar/data/sbach/shared/ngafid`
+- **Data**: `/data/ngafid`
 - **Sequence Length**: 10,000 (full flights)
 - **Batch Size**: 8 (optimized for long sequences)
 - **Learning Rate**: 5e-5 (conservative for stability)
@@ -47,7 +47,7 @@ Results will be saved to: `./results/bert_full_flights_YYYYMMDD_HHMMSS/`
 ## If Something Goes Wrong
 
 1. **Out of memory**: The script uses conservative batch size (8), but if you get OOM, restart the script
-2. **Data not found**: Check that `/oscar/data/sbach/shared/ngafid` exists and is accessible
+2. **Data not found**: Check that `/data/ngafid` exists and is accessible
 3. **Import errors**: Make sure you're in the project directory and have the right environment
 
 ## To Resume Training

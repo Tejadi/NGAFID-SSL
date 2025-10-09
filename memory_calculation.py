@@ -4,7 +4,7 @@ Calculate memory requirements for the optimized BERT model with seq_len=10000.
 """
 
 def calculate_memory_usage():
-    print("🧮 Memory Usage Calculation for Optimized BERT (seq_len=10000)")
+    print(" Memory Usage Calculation for Optimized BERT (seq_len=10000)")
     print("=" * 70)
 
     # Model parameters
@@ -16,7 +16,7 @@ def calculate_memory_usage():
     decoder_layers = 6  # Reduced from 8
     num_heads = 16
 
-    print(f"📊 Model Configuration:")
+    print(f" Model Configuration:")
     print(f"   Batch size: {batch_size}")
     print(f"   Sequence length: {seq_len:,}")
     print(f"   Feature dimension: {feat_dim}")
@@ -61,7 +61,7 @@ def calculate_memory_usage():
     total_params = projection_params + encoder_params + position_params + decoder_params
     model_memory_gb = total_params * 4 / 1e9  # FP32
 
-    print(f"🏗️  Model Memory:")
+    print(f"️  Model Memory:")
     print(f"   Total parameters: {total_params:,}")
     print(f"   Model weights (FP32): {model_memory_gb:.2f} GB")
 
@@ -116,20 +116,20 @@ def calculate_memory_usage():
     total_memory = (model_memory_gb + optimizer_memory_gb + optimized_activation_memory +
                    gradient_memory + data_memory + cuda_overhead)
 
-    print(f"\n📈 Total Estimated Memory Usage:")
+    print(f"\n Total Estimated Memory Usage:")
     print(f"   Total: {total_memory:.2f} GB")
     print(f"   Available: 24.0 GB (RTX 6000)")
     print(f"   Margin: {24.0 - total_memory:.2f} GB")
 
     if total_memory < 24.0:
-        print(f"✅ SHOULD FIT! Memory margin: {24.0 - total_memory:.2f} GB")
+        print(f" SHOULD FIT! Memory margin: {24.0 - total_memory:.2f} GB")
         if 24.0 - total_memory < 2.0:
-            print("⚠️  Tight fit - monitor memory usage during training")
+            print("️  Tight fit - monitor memory usage during training")
         else:
-            print("🎉 Comfortable memory margin")
+            print(" Comfortable memory margin")
     else:
-        print(f"❌ WILL NOT FIT! Exceeds by: {total_memory - 24.0:.2f} GB")
-        print("\n🔧 Additional optimizations needed:")
+        print(f" WILL NOT FIT! Exceeds by: {total_memory - 24.0:.2f} GB")
+        print("\n Additional optimizations needed:")
         if total_memory - 24.0 < 2.0:
             print("   - Reduce batch size to 1")
             print("   - Increase gradient accumulation to 8")
@@ -137,7 +137,7 @@ def calculate_memory_usage():
             print("   - Reduce hidden_size further (768 or 512)")
             print("   - Reduce encoder layers further (6 or 4)")
 
-    print(f"\n💡 Key optimizations applied:")
+    print(f"\n Key optimizations applied:")
     print(f"   - Mixed precision training (FP16): ~50% activation memory reduction")
     print(f"   - Gradient checkpointing: ~70% activation memory reduction")
     print(f"   - 8-bit optimizer: ~50% optimizer memory reduction")
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     will_fit, total_memory = calculate_memory_usage()
 
     if not will_fit:
-        print(f"\n🚨 URGENT: Need additional {total_memory - 24.0:.2f} GB reduction!")
+        print(f"\n URGENT: Need additional {total_memory - 24.0:.2f} GB reduction!")
         print("Recommended immediate changes:")
         print("1. batch_size = 1 (saves ~2-3 GB)")
         print("2. gradient_accumulation_steps = 8 (maintains effective batch size)")

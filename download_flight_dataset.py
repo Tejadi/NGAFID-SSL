@@ -29,7 +29,7 @@ def download_kaggle_dataset(dataset_name: str, output_dir: str) -> bool:
             unzip=True
         )
 
-        print(f"✓ Successfully downloaded to {output_dir}")
+        print(f" Successfully downloaded to {output_dir}")
         return True
 
     except ImportError:
@@ -71,7 +71,7 @@ def download_zenodo_dataset(zenodo_id: str, output_dir: str) -> bool:
                     if chunk:
                         f.write(chunk)
 
-            print(f"✓ Downloaded {filename}")
+            print(f" Downloaded {filename}")
 
             # If it's a zip file, extract it
             if filename.endswith('.zip'):
@@ -125,7 +125,7 @@ def analyze_flight_data(data_dir: str) -> Tuple[Optional[int], Optional[str]]:
 
             # This looks like flight data if it has a reasonable number of numeric columns
             if len(numeric_cols) >= 10:  # Flight data typically has many sensor readings
-                print(f"  ✓ This looks like flight data!")
+                print(f"   This looks like flight data!")
 
                 # Clean and check final feature dimension
                 df_numeric = df[numeric_cols].fillna(method='ffill').fillna(method='bfill')
@@ -200,7 +200,7 @@ def create_synthetic_flight_dataset(output_dir: str,
         if (i + 1) % 20 == 0:
             print(f"  Created {i + 1}/{num_flights} files...")
 
-    print(f"✓ Created {num_flights} synthetic flight files in {output_dir}")
+    print(f" Created {num_flights} synthetic flight files in {output_dir}")
     return feat_dim, output_dir
 
 
@@ -236,26 +236,26 @@ def main():
             num_flights=args.num_synthetic
         )
         success = True
-        print(f"\n✓ Synthetic dataset ready!")
+        print(f"\n Synthetic dataset ready!")
         print(f"  Feature dimension: {feat_dim}")
         print(f"  Data directory: {data_dir}")
         print(f"  Files: {args.num_synthetic}")
         return
 
     if success:
-        print(f"\n📊 Analyzing downloaded data...")
+        print(f"\n Analyzing downloaded data...")
         feat_dim, data_dir = analyze_flight_data(args.output_dir)
 
         if feat_dim:
-            print(f"\n✓ Dataset ready for training!")
+            print(f"\n Dataset ready for training!")
             print(f"  Feature dimension: {feat_dim}")
             print(f"  Data directory: {data_dir}")
             print(f"\nTo train the model, run:")
             print(f"python train_bert_masked_regressor.py --local_data_dir {data_dir} --feat_dim {feat_dim}")
         else:
-            print("❌ Could not determine dataset structure")
+            print(" Could not determine dataset structure")
     else:
-        print("❌ Failed to download dataset")
+        print(" Failed to download dataset")
         print("Try using synthetic data: python download_flight_dataset.py --source synthetic")
 
 

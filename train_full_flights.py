@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Training script for full-flight BERT masked regressor on Oscar cluster.
-Optimized for RTX A5000 with 24-hour training window.
+Training script for full-flight BERT masked regressor.
+Optimized for GPU training with 24-hour training window.
 """
 
 import argparse
@@ -67,7 +67,7 @@ def compute_normalization_parameters(data_dir: str, max_files: int = 100) -> Dic
     Returns:
         Dictionary containing 'mean' and 'std' arrays
     """
-    print("📊 Computing global normalization parameters...")
+    print("Computing global normalization parameters...")
 
     # Find training data files
     data_path = Path(data_dir)
@@ -86,7 +86,7 @@ def compute_normalization_parameters(data_dir: str, max_files: int = 100) -> Dic
     if not train_files:
         raise ValueError(f"No training CSV files found in {data_dir}")
 
-    print(f"   Using {len(train_files)} files to compute normalization parameters")
+    print(f"Using {len(train_files)} files to compute normalization parameters")
 
     # Collect all data for computing global statistics
     all_data = []
@@ -110,26 +110,20 @@ def compute_normalization_parameters(data_dir: str, max_files: int = 100) -> Dic
                 all_data.append(flight_data)
 
         except Exception as e:
-            print(f"   Warning: Error processing {csv_file.name}: {e}")
+            print(f"Warning: Error processing {csv_file.name}: {e}")
             continue
 
     if not all_data:
         raise ValueError("No valid data found for computing normalization parameters")
 
-    # Concatenate all data
     concatenated_data = np.vstack(all_data)
-    print(f"   Total data shape: {concatenated_data.shape}")
+    print(f"Total data shape: {concatenated_data.shape}")
 
-    # Compute global mean and std (same as autoencoder)
     data_mean = np.mean(concatenated_data, axis=0)
     data_std = np.std(concatenated_data, axis=0)
-
-    # Avoid division by zero (same as autoencoder)
     data_std[data_std == 0] = 1.0
 
-    print(f"   Computed normalization parameters for {len(data_mean)} features")
-    print(f"   Mean range: [{data_mean.min():.4f}, {data_mean.max():.4f}]")
-    print(f"   Std range: [{data_std.min():.4f}, {data_std.max():.4f}]")
+    print(f"Computed normalization parameters for {len(data_mean)} features")
 
     return {
         'mean': data_mean,
@@ -167,9 +161,7 @@ class GlobalNormalizedFlightDataset(LocalFlightDataset):
         self.mean_mask_lengths = mean_mask_lengths
 
         if use_random_masking:
-            print(f"✨ Using random masking with {len(masking_ratios)} ratios × {len(mean_mask_lengths)} lengths = {len(masking_ratios) * len(mean_mask_lengths)} combinations")
-            print(f"   Masking ratios: {masking_ratios}")
-            print(f"   Mean mask lengths: {mean_mask_lengths}")
+            print(f"Using random masking with {len(masking_ratios)} ratios × {len(mean_mask_lengths)} lengths = {len(masking_ratios) * len(mean_mask_lengths)} combinations")
 
     def _normalize_data(self, data: np.ndarray) -> np.ndarray:
         """
@@ -192,8 +184,7 @@ class GlobalNormalizedFlightDataset(LocalFlightDataset):
 
         # Ensure dimensions match
         if mean.shape[0] != data.shape[1] or std.shape[0] != data.shape[1]:
-            print(f"Warning: Dimension mismatch in normalization. "
-                  f"Data: {data.shape[1]}, Mean: {mean.shape[0]}, Std: {std.shape[0]}")
+            print(f"Warning: Dimension mismatch in normalization (Data: {data.shape[1]}, Mean: {mean.shape[0]}, Std: {std.shape[0]})")
             return super()._normalize_data(data)
 
         # Apply normalization: (data - mean) / std
@@ -425,12 +416,10 @@ def main():
                         help="Fixed mean mask length (default: 60, only used with --use_fixed_masking)")
     args = parser.parse_args()
 
-    # Memory-optimized configuration for Oscar cluster training
-    print("🚀 Starting Memory-Optimized BERT Flight Training")
-    print("=" * 60)
+    print("Starting BERT Flight Training")
 
     # Dataset and model configuration
-    data_dir = "/oscar/data/sbach/shared/ngafid"
+    data_dir = "/data/ngafid"
     seq_len = 10000  # Full flight sequences (non-negotiable)
     batch_size = 4   # Ultra-conservative for seq_len=10000
     gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
@@ -456,80 +445,65 @@ def main():
     use_gradient_checkpointing = True
     use_memory_efficient_optimizer = True
 
-    print(f"📊 Configuration:")
-    print(f"   Data directory: {data_dir}")
-    print(f"   Sequence length: {seq_len:,}")
-    print(f"   Batch size: {batch_size}")
-    print(f"   Epochs: {epochs}")
-    print(f"   Learning rate: {learning_rate}")
-    print(f"   Model: {hidden_size}d, {encoder_layers}enc, {decoder_layers}dec")
-    print()
+    print(f"Configuration: seq_len={seq_len:,}, batch_size={batch_size}, epochs={epochs}, lr={learning_rate}")
+    print(f"Model: {hidden_size}d, {encoder_layers}enc, {decoder_layers}dec")
 
-    # Setup device
     if torch.cuda.is_available():
         device = torch.device("cuda")
-        print(f"🔥 Using GPU: {torch.cuda.get_device_name()}")
-        print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        print(f"Using GPU: {torch.cuda.get_device_name()} ({torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB)")
     else:
         device = torch.device("cpu")
-        print("⚠️  Using CPU (GPU not available)")
-    print()
+        print("Using CPU")
 
     # Check data directory
     if not os.path.exists(data_dir):
-        print(f"❌ Error: Data directory not found: {data_dir}")
+        print(f"Error: Data directory not found: {data_dir}")
         print("Please check the path and try again.")
         exit(1)
 
-    print(f"✅ Found data directory: {data_dir}")
+    print(f"Found data directory: {data_dir}")
 
     # Get feature dimension from data
-    print("🔍 Detecting feature dimension from data...")
+    print("Detecting feature dimension from data...")
     try:
         feat_dim = get_feature_dim_from_local_data(data_dir)
-        print(f"✅ Detected feature dimension: {feat_dim}")
+        print(f"Detected feature dimension: {feat_dim}")
     except Exception as e:
-        print(f"❌ Error detecting feature dimension: {e}")
+        print(f"Error detecting feature dimension: {e}")
         print("Using default feature dimension: 44")
         feat_dim = 44
 
     # Compute global normalization parameters (same as autoencoder)
-    print("🔧 Computing global normalization parameters...")
+    print("Computing global normalization parameters...")
     try:
         normalization_params = compute_normalization_parameters(data_dir, max_files=max_files_train)
-        print(f"✅ Computed normalization parameters")
+        print(f"Computed normalization parameters")
 
         # Save normalization parameters for consistency with autoencoder
         norm_params_path = f"./results/bert_normalization_params_{time.strftime('%Y%m%d_%H%M%S')}.npy"
         os.makedirs(os.path.dirname(norm_params_path), exist_ok=True)
         np.save(norm_params_path, normalization_params)
-        print(f"💾 Saved normalization parameters to: {norm_params_path}")
+        print(f"Saved normalization parameters to: {norm_params_path}")
 
     except Exception as e:
-        print(f"❌ Error computing normalization parameters: {e}")
-        print("⚠️  Training will continue without global normalization")
+        print(f"Error computing normalization parameters: {e}")
+        print("Training will continue without global normalization")
         normalization_params = None
 
-    # Create data loaders with global normalization
     if args.use_fixed_masking:
-        print(f"📁 Creating data loaders with FIXED masking...")
-        print(f"   Masking ratio: {args.masking_ratio}")
-        print(f"   Mean mask length: {args.mean_mask_length}")
+        print(f"Using FIXED masking: ratio={args.masking_ratio}, length={args.mean_mask_length}")
         use_random_masking = False
         masking_ratio = args.masking_ratio
         mean_mask_length = args.mean_mask_length
         masking_ratios = [args.masking_ratio]
         mean_mask_lengths = [args.mean_mask_length]
     else:
-        print("📁 Creating data loaders with RANDOM masking...")
         masking_ratios = [0.2, 0.5, 0.8]
         mean_mask_lengths = [5, 60]
-        print(f"🎲 Training will use random masking: {len(masking_ratios)} ratios × {len(mean_mask_lengths)} lengths = {len(masking_ratios) * len(mean_mask_lengths)} combinations")
-        print(f"   Masking ratios: {masking_ratios}")
-        print(f"   Mean mask lengths: {mean_mask_lengths}")
+        print(f"Using RANDOM masking: {len(masking_ratios)} ratios × {len(mean_mask_lengths)} lengths = {len(masking_ratios) * len(mean_mask_lengths)} combinations")
         use_random_masking = True
-        masking_ratio = 0.6  # Default for fallback
-        mean_mask_length = 3  # Default for fallback
+        masking_ratio = 0.6
+        mean_mask_length = 3
 
     try:
         train_loader = create_global_normalized_dataloader(
@@ -550,13 +524,13 @@ def main():
 
         # Use fixed masking for validation (for consistent evaluation)
         # Use dedicated validation directory if it exists
-        val_data_dir = "/oscar/data/sbach/shared/ngafid/preprocessed_data/val"
+        val_data_dir = "/data/ngafid/preprocessed_data/val"
         if not os.path.exists(val_data_dir):
-            print(f"⚠️  Validation directory {val_data_dir} not found, using splits from main data")
+            print(f"Validation directory {val_data_dir} not found, using splits from main data")
             val_data_dir = data_dir
             val_split = "val"
         else:
-            print(f"✅ Using dedicated validation directory: {val_data_dir}")
+            print(f"Using dedicated validation directory: {val_data_dir}")
             val_split = "train"  # Use all files in val directory
 
         val_loader = create_global_normalized_dataloader(
@@ -572,13 +546,13 @@ def main():
             masking_ratio=0.6,  # Standard masking ratio for evaluation
             mean_mask_length=3   # Standard mean mask length for evaluation
         )
-        print(f"✅ Created data loaders (train: ~{len(train_loader)} batches)")
+        print(f"Created data loaders (train: ~{len(train_loader)} batches)")
     except Exception as e:
-        print(f"❌ Error creating data loaders: {e}")
+        print(f"Error creating data loaders: {e}")
         exit(1)
 
     # Create memory-optimized model
-    print("🏗️  Creating memory-optimized model...")
+    print("Creating memory-optimized model...")
     model = BertMaskedRegressor(
         feat_dim=feat_dim,
         hidden_size=hidden_size,
@@ -592,7 +566,7 @@ def main():
     ).to(device)
 
     total_params = count_parameters(model)
-    print(f"✅ Model created with {total_params:,} parameters")
+    print(f"Model created with {total_params:,} parameters")
     print(f"   Estimated GPU memory: ~{total_params * 4 / 1e9:.1f} GB")
     print()
 
@@ -607,9 +581,9 @@ def main():
                 weight_decay=1e-5,
                 betas=(0.9, 0.999)
             )
-            print("✅ Using 8-bit AdamW optimizer (50% memory reduction)")
+            print("Using 8-bit AdamW optimizer (50% memory reduction)")
         except ImportError:
-            print("⚠️  bitsandbytes not available, using standard AdamW")
+            print("bitsandbytes not available, using standard AdamW")
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=learning_rate,
@@ -632,7 +606,7 @@ def main():
     # Setup mixed precision training
     scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
 
-    print(f"📈 Memory-optimized training setup:")
+    print(f"Memory-optimized training setup:")
     print(f"   Batch size: {batch_size}")
     print(f"   Gradient accumulation steps: {gradient_accumulation_steps}")
     print(f"   Effective batch size: {batch_size * gradient_accumulation_steps}")
@@ -695,22 +669,22 @@ def main():
                     "save_interval": save_interval,
                 }
             )
-            print("✅ W&B logging enabled")
+            print("W&B logging enabled")
         except Exception as e:
-            print(f"⚠️  W&B setup failed: {e}")
+            print(f"W&B setup failed: {e}")
             use_wandb = False
 
-    print(f"📊 Results will be saved to: {output_dir}")
+    print(f"Results will be saved to: {output_dir}")
     print()
 
     # Create save directory for this training run in local checkpoints folder
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    save_dir = f"/oscar/home/cduong5/NGAFID-SSL/checkpoints/bert_models_{timestamp}"
+    save_dir = f"./checkpoints/bert_models_{timestamp}"
     os.makedirs(save_dir, exist_ok=True)
-    print(f"💾 Models will be saved to: {save_dir}")
+    print(f"Models will be saved to: {save_dir}")
 
     # Training loop
-    print("🎯 Starting training...")
+    print("Starting training...")
     global_step = 0
     best_eval_loss = float('inf')
 
@@ -839,7 +813,7 @@ def main():
 
             # Evaluation (only after actual optimizer steps)
             if accumulation_step % gradient_accumulation_steps == 0 and global_step % eval_interval == 0 and global_step > 0:
-                pbar.write(f"\n🔍 Evaluating at step {global_step}...")
+                pbar.write(f"\nEvaluating at step {global_step}...")
                 eval_metrics = evaluate_model(model, val_loader, device)
 
                 writer.add_scalar("eval/loss", eval_metrics["eval_loss"], global_step)
@@ -885,7 +859,7 @@ def main():
 
                     wandb.log(wandb_eval_metrics, step=global_step)
 
-                pbar.write(f"📊 Step {global_step}: Eval MSE = {eval_metrics['eval_mse_loss']:.4f}, MAE = {eval_metrics['eval_mae_loss']:.4f}")
+                pbar.write(f"Step {global_step}: Eval MSE = {eval_metrics['eval_mse_loss']:.4f}, MAE = {eval_metrics['eval_mae_loss']:.4f}")
 
                 # Return to training mode
                 model.train()
@@ -909,7 +883,7 @@ def main():
                             'seq_len': seq_len,
                         }
                     }, f"{output_dir}/best_model.pt")
-                    pbar.write(f"💾 Saved best model (eval_loss: {best_eval_loss:.4f})")
+                    pbar.write(f"Saved best model (eval_loss: {best_eval_loss:.4f})")
 
             # Save checkpoint (only after actual optimizer steps)
             if accumulation_step % gradient_accumulation_steps == 0 and global_step % save_interval == 0 and global_step > 0:
@@ -921,7 +895,7 @@ def main():
                     'global_step': global_step,
                     'feat_dim': feat_dim,
                 }, f"{output_dir}/checkpoint_step_{global_step}.pt")
-                pbar.write(f"💾 Saved checkpoint at step {global_step}")
+                pbar.write(f"Saved checkpoint at step {global_step}")
 
             # Clear gradients and cache if not accumulating
             if accumulation_step % gradient_accumulation_steps != 0:
@@ -950,7 +924,7 @@ def main():
                 "epoch/lr": scheduler.get_last_lr()[0],
             }, step=global_step)
 
-        print(f"\n📈 Epoch {epoch+1} Summary:")
+        print(f"\nEpoch {epoch+1} Summary:")
         print(f"   Average Loss: {avg_epoch_loss:.4f}")
         print(f"   Average MSE: {avg_epoch_mse:.4f}")
         print(f"   Average MAE: {avg_epoch_mae:.4f}")
@@ -981,7 +955,7 @@ def main():
                     'total_params': total_params,
                 }
             }, epoch_save_path)
-            print(f"💾 Saved model at epoch {epoch+1} to: {epoch_save_path}")
+            print(f"Saved model at epoch {epoch+1} to: {epoch_save_path}")
 
         print()
 
@@ -1016,9 +990,9 @@ def main():
 
     writer.close()
 
-    print("🎉 Training completed successfully!")
-    print(f"📁 Results saved to: {output_dir}")
-    print(f"🏆 Best evaluation loss: {best_eval_loss:.4f}")
+    print("Training completed successfully!")
+    print(f"Results saved to: {output_dir}")
+    print(f"Best evaluation loss: {best_eval_loss:.4f}")
 
 
 if __name__ == "__main__":

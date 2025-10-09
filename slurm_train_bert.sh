@@ -106,7 +106,7 @@ echo "Job finished at: $(date)"
 
 # Print some final statistics
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ Training completed successfully!"
+    echo " Training completed successfully!"
 
     # Show output directory contents
     echo "Output files created:"
@@ -116,7 +116,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "Model file sizes:"
     du -h "$OUTPUT_DIR/$JOB_NAME/"*.pt 2>/dev/null || echo "No model files found"
 else
-    echo "❌ Training failed with exit code: $EXIT_CODE"
+    echo " Training failed with exit code: $EXIT_CODE"
     echo "Check the error log for details"
 fi
 

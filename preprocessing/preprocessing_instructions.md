@@ -34,8 +34,8 @@ Steps for loading dataset:
 3. Load dataset:
 
     Load the dataset with:
-    
-        git clone https://huggingface.co/datasets/CDuong04/NGAFID-LOCI-Data
+
+        git clone https://huggingface.co/datasets/username/NGAFID-LOCI-Data
 
 Preprocess the dataset using the script in preprocessing.py.
 

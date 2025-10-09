@@ -44,10 +44,6 @@ model = TransformerAutoencoder(input_dim=44, d_model=128, num_heads=8,
                                num_encoder_layers=4, num_decoder_layers=4,
                                dim_feedforward=256, dropout=0.1).to(device)
 
-# param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
-# print(param_count)
-# breakpoint()
-
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 criterion = nn.MSELoss()
 

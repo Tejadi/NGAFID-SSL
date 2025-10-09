@@ -7,7 +7,7 @@ Solving environment: ...working... done
 
 ## Package Plan ##
 
-  environment location: /users/cduong5/miniconda3/envs/ngafid
+  environment location: /users/username/miniconda3/envs/ngafid
 
   added / updated specs:
     - accelerate

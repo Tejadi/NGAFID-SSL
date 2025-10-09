@@ -1,5 +1,5 @@
 {
-  "model_path": "/oscar/data/sbach/shared/ngafid/bert_h512_l6_1758224516/best_model.pt",
-  "data_dir": "/oscar/data/sbach/shared/ngafid/preprocessed_data/test",
+  "model_path": "/data/ngafid/bert_h512_l6_1758224516/best_model.pt",
+  "data_dir": "/data/ngafid/preprocessed_data/test",
   "metrics": {
     "mae": 

@@ -202,7 +202,7 @@ def main():
         avg = total_loss / max(total_elems, 1)
         print(f"[info] epoch {epoch:02d}  MSE(masked) = {avg:.6f}")
 
-    print("[info] training finished ✅")
+    print("[info] training finished ")
 
 if __name__ == "__main__":
     main()

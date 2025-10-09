@@ -1,6 +1,6 @@
 # BERT Flight Training on SLURM Cluster
 
-## 🎯 Quick Start
+##  Quick Start
 
 ### 1. Transfer Files to Cluster
 ```bash
@@ -14,13 +14,13 @@ tar -czf bert-flight-project.tar.gz \
     NGAFID-LOCI-GATS-Data/
 
 # Upload to cluster (replace with your cluster details)
-scp bert-flight-project.tar.gz username@cluster.university.edu:~/
+scp bert-flight-project.tar.gz username@your-cluster.university.edu:~/
 ```
 
 ### 2. Set Up on Cluster
 ```bash
 # SSH to your cluster
-ssh username@cluster.university.edu
+ssh username@your-cluster.university.edu
 
 # Extract files
 cd ~/
@@ -54,7 +54,7 @@ chmod +x slurm_train_bert.sh
 ./submit_training.sh
 ```
 
-## 📊 Monitoring Your Job
+##  Monitoring Your Job
 
 ### Check Job Status
 ```bash
@@ -95,7 +95,7 @@ cat logs/bert_training_JOBID.err
 sinfo
 ```
 
-## ⚙️ Configuration Options
+## ️ Configuration Options
 
 ### Current Settings (in slurm_train_bert.sh):
 - **Sequence Length**: 1024 (4x longer than default)
@@ -130,7 +130,7 @@ Edit `slurm_train_bert.sh` and change the training parameters:
 --wandb_project "my-custom-project"
 ```
 
-## 🎯 Expected Outputs
+##  Expected Outputs
 
 After successful training, you'll find:
 ```
@@ -143,7 +143,7 @@ bert_results/
     └── logs/                  # TensorBoard logs
 ```
 
-## 🚨 Common Issues
+##  Common Issues
 
 ### 1. **Out of Memory**
 - Reduce `--batch_size` from 16 to 8 or 4
@@ -161,13 +161,13 @@ bert_results/
 - Check GPU availability: `sinfo -p gpu`
 - Modify `#SBATCH --gres=gpu:1` for your cluster's GPU naming
 
-## 📞 Getting Help
+##  Getting Help
 
 1. **Check cluster documentation** for specific module names and partitions
 2. **Contact your cluster admin** for GPU access and resource limits
 3. **Check job efficiency** after completion: `seff JOBID`
 
-## 🏃‍♂️ Quick Test Run
+## ‍️ Quick Test Run
 
 For a quick test before the full training:
 ```bash

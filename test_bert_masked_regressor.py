@@ -483,7 +483,7 @@ if __name__ == "__main__":
 
         # Save to CSV
         results_df_sorted.to_csv(args.output_csv, index=False)
-        print(f"\n✓ Per-feature metrics saved to: {args.output_csv}")
+        print(f"\n Per-feature metrics saved to: {args.output_csv}")
 
         # Print summary statistics
         print("\nPer-Feature Metrics Summary:")

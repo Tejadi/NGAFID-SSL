@@ -12,7 +12,7 @@
 
 # Optional: Email notifications (uncomment and add your email)
 # #SBATCH --mail-type=BEGIN,END,FAIL
-# #SBATCH --mail-user=your.email@brown.edu
+# #SBATCH --mail-user=your.email@university.edu
 
 echo "=========================================="
 echo "BERT Full Flights Training Job"
@@ -61,7 +61,7 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
 
 echo "Starting BERT Full Flights training..."
-echo "Data directory: /oscar/data/sbach/shared/ngafid"
+echo "Data directory: /data/ngafid"
 echo "Sequence length: 10,000"
 echo "Expected runtime: 20-24 hours"
 echo "=========================================="
@@ -78,7 +78,7 @@ echo "Job finished at: $(date)"
 
 # Print some final statistics
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ Training completed successfully!"
+    echo " Training completed successfully!"
 
     # Show output directory contents
     if [ -d "./results" ]; then
@@ -90,7 +90,7 @@ if [ $EXIT_CODE -eq 0 ]; then
         find ./results -name "*.pt" -exec du -h {} \; 2>/dev/null || echo "No model files found"
     fi
 else
-    echo "❌ Training failed with exit code: $EXIT_CODE"
+    echo " Training failed with exit code: $EXIT_CODE"
     echo "Check the error log for details"
 fi
 

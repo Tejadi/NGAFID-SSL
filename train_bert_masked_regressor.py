@@ -45,7 +45,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train BERT Masked Regressor for Flight Data")
 
     # Data arguments
-    parser.add_argument("--repo_id", type=str, default="CDuong04/NGAFID-LOCI-GATS-Data",
+    parser.add_argument("--repo_id", type=str, default="username/NGAFID-LOCI-GATS-Data",
                         help="HuggingFace dataset repository ID")
     parser.add_argument("--local_data_dir", type=str, default=None,
                         help="Local directory containing flight CSV files (overrides HuggingFace)")
@@ -240,9 +240,9 @@ def main():
             config=vars(args),
             dir=output_dir,
         )
-        print(f"🪄 W&B tracking: {wandb.run.url}")
+        print(f"W&B tracking: {wandb.run.url}")
     else:
-        print("📝 Using only TensorBoard logging")
+        print("Using only TensorBoard logging")
 
     print("Creating data loaders...")
 
@@ -359,12 +359,10 @@ def main():
 
     print(f"Model parameters: {count_parameters(model):,}")
 
-    # Log model to W&B
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
         wandb.config.update({
             "model_parameters": str(count_parameters(model)),
-            # "feat_dim": str(feat_dim),
         })
 
     # Setup optimizer

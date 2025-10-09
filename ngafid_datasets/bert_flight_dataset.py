@@ -27,7 +27,7 @@ class BertFlightDataset(IterableDataset):
 
     def __init__(
         self,
-        repo_id: str = "CDuong04/NGAFID-LOCI-GATS-Data",
+        repo_id: str = "username/NGAFID-LOCI-GATS-Data",
         split: str = "train",
         subdir: str = "preprocessed_data",
         seq_len: int = 256,
@@ -166,7 +166,7 @@ class BertFlightDataset(IterableDataset):
 
 
 def create_dataloader(
-    repo_id: str = "CDuong04/NGAFID-LOCI-GATS-Data",
+    repo_id: str = "username/NGAFID-LOCI-GATS-Data",
     split: str = "train",
     batch_size: int = 16,
     seq_len: int = 256,

@@ -279,7 +279,7 @@ def visualize_best_flights(model, test_data, flight_ids, normalization_params,
 
     summary_df = pd.DataFrame(summary_data)
     summary_df.to_csv('best_flights_summary.csv', index=False)
-    print(f"\n✓ Summary saved to: best_flights_summary.csv")
+    print(f"\nSummary saved to: best_flights_summary.csv")
 
     print("\n" + "=" * 80)
     print("VISUALIZATION COMPLETE")
