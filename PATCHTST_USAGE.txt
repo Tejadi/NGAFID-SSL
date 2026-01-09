@@ -1,0 +1,123 @@
+PatchTST Masked Regressor for Flight Data
+==========================================
+
+This implementation provides PatchTST for masked reconstruction tasks, matching
+the BERT masked regressor setup (same masks, normalization, splits, etc).
+
+FILES CREATED:
+--------------
+1. models/patchtst_masked_regressor.py      - PatchTST model architecture
+2. train_patchtst_masked_regressor.py       - Training script
+3. test_patchtst_masked_regressor.py        - Testing/evaluation script
+4. slurm_train_patchtst.sh                  - SLURM batch script for training
+5. slurm_test_patchtst.sh                   - SLURM batch script for testing
+
+ARCHITECTURE:
+-------------
+- Patch-based transformer encoder
+- Learnable patch embeddings + positional encoding
+- Multi-head self-attention layers
+- Decoder reconstructs original time series
+- Same loss function as BERT (MSE on masked positions)
+
+TRAINING ON CLUSTER:
+--------------------
+Submit training job:
+    sbatch slurm_train_patchtst.sh
+
+Or run directly:
+    python train_patchtst_masked_regressor.py \
+        --local_data_dir ./NGAFID-LOCI-GATS-Data \
+        --seq_len 1024 \
+        --batch_size 16 \
+        --epochs 18 \
+        --patch_len 16 \
+        --d_model 512 \
+        --encoder_layers 6 \
+        --decoder_layers 3 \
+        --n_heads 8 \
+        --d_ff 2048 \
+        --output_dir ./patchtst_results
+
+TESTING:
+--------
+Submit test job:
+    sbatch slurm_test_patchtst.sh <model_path> <test_data_dir>
+
+Or run directly:
+    python test_patchtst_masked_regressor.py \
+        --data_dir ./NGAFID-LOCI-GATS-Data/preprocessed_data/test \
+        --model_path ./patchtst_results/best_model.pt
+
+KEY FEATURES:
+-------------
+- Same data loading as BERT (uses LocalFlightDataset/BertFlightDataset)
+- Same masking strategy (geometric noise mask, 60% ratio, mean length 3)
+- Same normalization (per-sequence median + IQR)
+- Same training splits (in-type + cross-aircraft-type)
+- Same evaluation metrics (MAE, MSE, RMSE on denormalized data)
+- W&B logging support
+- TensorBoard logging
+- Checkpoint saving
+
+MODEL PARAMETERS (default):
+---------------------------
+- Patch length: 16
+- Model dimension: 512
+- Encoder layers: 6
+- Decoder layers: 3
+- Attention heads: 8
+- FFN dimension: 2048
+- Dropout: 0.1
+
+OUTPUTS:
+--------
+Training creates:
+- best_model.pt (best validation loss)
+- checkpoint_*.pt (periodic checkpoints)
+- args.json (hyperparameters)
+- TensorBoard logs
+- W&B dashboard (if enabled)
+
+Testing creates:
+- patchtst_test_results.json (metrics)
+- aircraft_comparison_*.png (aircraft type plots)
+- reconstruction_comparison_*.png (sample reconstructions)
+
+REQUIREMENTS:
+-------------
+All dependencies from existing requirements.txt work.
+No additional packages needed beyond BERT setup:
+- torch
+- numpy
+- pandas
+- tqdm
+- tensorboard
+- wandb (optional)
+- transformers
+- datasets
+
+CLUSTER SETUP:
+--------------
+The SLURM scripts are configured for:
+- 1 GPU
+- 64GB RAM (training) / 32GB RAM (testing)
+- 8 CPUs (training) / 4 CPUs (testing)
+- 24 hours (training) / 4 hours (testing)
+
+Adjust partition/resources in .sh files as needed for your cluster.
+
+COMPARISON TO BERT:
+-------------------
+Same:
+- Training objective (masked reconstruction)
+- Data loading and preprocessing
+- Masking strategy
+- Normalization approach
+- Evaluation metrics
+- Dataset splits
+
+Different:
+- Model architecture (PatchTST vs BERT)
+- Patch-based processing instead of token-based
+- Different hyperparameters tuned for PatchTST
