@@ -22,9 +22,21 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Set
 from pathlib import Path
 import json
+import yaml
 from tqdm import tqdm
 
-from utils import load_config
+
+def load_config(file: str = 'env.yml'):
+    """Load configuration from YAML file."""
+    config_path = Path(__file__).parent.parent / file
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    base_dir = Path(__file__).parent.parent
+    for key, path in config['paths'].items():
+        config['paths'][key] = str(base_dir / path)
+
+    return config
 
 
 class TFIDFRetrievalBenchmark:
