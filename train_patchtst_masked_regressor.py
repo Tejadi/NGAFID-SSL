@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
 """
-Training script for BERT-based masked column regression on flight data.
-
-Simple architecture:
-1. Load masked flight data from HuggingFace dataset
-2. Use BERT encoder to get embeddings from masked data
-3. Train decoder to reconstruct original flight data
-4. Evaluate on masked positions only
+Training script for PatchTST-based masked regression on flight data.
+Supports random masking for enhanced training diversity.
 """
 
 import argparse
@@ -22,7 +17,6 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 from tqdm import tqdm
 
-# Weights & Biases for experiment tracking
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -30,11 +24,9 @@ except ImportError:
     WANDB_AVAILABLE = False
     print("wandb not available - skipping W&B logging")
 
-# Import our models and dataset
 try:
-    from models.bert_masked_regressor import BertMaskedRegressor, count_parameters
-    from ngafid_datasets.bert_flight_dataset import create_dataloader
-    from ngafid_datasets.local_flight_dataset import create_local_dataloader, get_feature_dim_from_local_data
+    from models.patchtst_masked_regressor import PatchTSTMaskedRegressor, count_parameters
+    from train_full_flights import GlobalNormalizedFlightDataset, compute_normalization_parameters
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure you're running from the project root directory")
@@ -42,15 +34,11 @@ except ImportError as e:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train BERT Masked Regressor for Flight Data")
+    parser = argparse.ArgumentParser(description="Train PatchTST Masked Regressor for Flight Data")
 
     # Data arguments
-    parser.add_argument("--repo_id", type=str, default="CDuong04/NGAFID-LOCI-GATS-Data",
-                        help="HuggingFace dataset repository ID")
-    parser.add_argument("--local_data_dir", type=str, default=None,
-                        help="Local directory containing flight CSV files (overrides HuggingFace)")
-    parser.add_argument("--subdir", type=str, default="preprocessed_data",
-                        help="Subdirectory in the dataset")
+    parser.add_argument("--local_data_dir", type=str, required=True,
+                        help="Local directory containing flight CSV files")
     parser.add_argument("--seq_len", type=int, default=256,
                         help="Sequence length for flight windows")
     parser.add_argument("--max_files_train", type=int, default=None,
@@ -58,21 +46,27 @@ def parse_args():
     parser.add_argument("--max_files_val", type=int, default=100,
                         help="Maximum validation files to use")
     parser.add_argument("--train_split", type=float, default=0.8,
-                        help="Fraction of files for training (local data only)")
+                        help="Fraction of files for training")
     parser.add_argument("--val_split", type=float, default=0.1,
-                        help="Fraction of files for validation (local data only)")
+                        help="Fraction of files for validation")
 
     # Model arguments
     parser.add_argument("--feat_dim", type=int, default=None,
                         help="Feature dimension (auto-detected if None)")
-    parser.add_argument("--hidden_size", type=int, default=1536,
-                        help="BERT hidden size")
-    parser.add_argument("--encoder_layers", type=int, default=12,
-                        help="Number of BERT encoder layers")
-    parser.add_argument("--decoder_layers", type=int, default=8,
-                        help="Number of decoder layers")
-    parser.add_argument("--num_heads", type=int, default=16,
+    parser.add_argument("--patch_len", type=int, default=16,
+                        help="Patch length for PatchTST")
+    parser.add_argument("--stride", type=int, default=8,
+                        help="Stride for PatchTST")
+    parser.add_argument("--d_model", type=int, default=512,
+                        help="Model dimension")
+    parser.add_argument("--n_heads", type=int, default=8,
                         help="Number of attention heads")
+    parser.add_argument("--d_ff", type=int, default=2048,
+                        help="Feedforward dimension")
+    parser.add_argument("--encoder_layers", type=int, default=6,
+                        help="Number of encoder layers")
+    parser.add_argument("--decoder_layers", type=int, default=3,
+                        help="Number of decoder layers")
     parser.add_argument("--dropout", type=float, default=0.1,
                         help="Dropout rate")
 
@@ -92,11 +86,19 @@ def parse_args():
     parser.add_argument("--save_interval", type=int, default=5000,
                         help="Model save interval in steps")
 
-    # arguments
+    # Random masking arguments (matching BERT setup)
+    parser.add_argument("--use_random_masking", action="store_true",
+                        help="Use random masking ratios and lengths")
+    parser.add_argument("--masking_ratios", type=float, nargs='+', default=[0.2, 0.5, 0.8],
+                        help="List of masking ratios to sample from (if using random masking)")
+    parser.add_argument("--mean_mask_lengths", type=int, nargs='+', default=[5, 60],
+                        help="List of mean mask lengths to sample from (if using random masking)")
+
+    # Fixed masking arguments (fallback if not using random)
     parser.add_argument("--masking_ratio", type=float, default=0.6,
-                        help="Ratio of values to mask")
+                        help="Fixed masking ratio (used if not using random masking)")
     parser.add_argument("--mean_mask_length", type=int, default=3,
-                        help="Average length of masked segments")
+                        help="Fixed mean mask length (used if not using random masking)")
 
     # System arguments
     parser.add_argument("--device", type=str, default="auto",
@@ -107,13 +109,13 @@ def parse_args():
                         help="Random seed")
 
     # Output arguments
-    parser.add_argument("--output_dir", type=str, default="./bert_masked_regressor_runs",
+    parser.add_argument("--output_dir", type=str, default="./patchtst_masked_regressor_runs",
                         help="Output directory for models and logs")
     parser.add_argument("--job_name", type=str, default=None,
                         help="Job name for this run")
 
     # Weights & Biases arguments
-    parser.add_argument("--wandb_project", type=str, default="bert-flight-ssl",
+    parser.add_argument("--wandb_project", type=str, default="patchtst-flight-ssl",
                         help="W&B project name")
     parser.add_argument("--wandb_entity", type=str, default=None,
                         help="W&B entity/team name")
@@ -126,7 +128,6 @@ def parse_args():
 
 
 def setup_device(device_str: str) -> torch.device:
-    """Setup compute device."""
     if device_str == "auto":
         if torch.cuda.is_available():
             device = torch.device("cuda")
@@ -142,11 +143,11 @@ def setup_device(device_str: str) -> torch.device:
 
 
 def setup_output_dir(args) -> str:
-    """Create output directory for this run."""
     if args.job_name:
         run_name = args.job_name
     else:
-        run_name = f"bert_h{args.hidden_size}_l{args.encoder_layers}_{int(time.time())}"
+        masking_suffix = "random" if args.use_random_masking else "fixed"
+        run_name = f"patchtst_d{args.d_model}_l{args.encoder_layers}_{masking_suffix}_{int(time.time())}"
 
     output_dir = os.path.join(args.output_dir, run_name)
     os.makedirs(output_dir, exist_ok=True)
@@ -160,7 +161,6 @@ def setup_output_dir(args) -> str:
 
 
 def create_lr_scheduler(optimizer, warmup_steps: int, total_steps: int):
-    """Create learning rate scheduler with warmup."""
     def lr_lambda(step):
         if step < warmup_steps:
             return step / warmup_steps
@@ -171,7 +171,6 @@ def create_lr_scheduler(optimizer, warmup_steps: int, total_steps: int):
 
 
 def evaluate_model(model, dataloader, device, max_batches: int = 100) -> Dict[str, float]:
-    """Evaluate model on validation data."""
     model.eval()
     total_loss = 0.0
     total_mse_loss = 0.0
@@ -190,7 +189,6 @@ def evaluate_model(model, dataloader, device, max_batches: int = 100) -> Dict[st
 
             loss, mse_loss, mae_loss = model.compute_loss(x_masked, x_original, mask)
 
-            # Count masked positions for per-position metrics
             masked_positions = (mask == 0).sum().item()
 
             total_loss += loss.item() * x_masked.size(0)
@@ -232,7 +230,7 @@ def main():
     # Initialize Weights & Biases
     use_wandb = WANDB_AVAILABLE and not args.no_wandb
     if use_wandb:
-        wandb_run_name = args.wandb_run_name or args.job_name or f"bert_h{args.hidden_size}_l{args.encoder_layers}_{int(time.time())}"
+        wandb_run_name = args.wandb_run_name or args.job_name or f"patchtst_d{args.d_model}_l{args.encoder_layers}_{int(time.time())}"
         wandb.init(
             project=args.wandb_project,
             entity=args.wandb_entity,
@@ -240,131 +238,98 @@ def main():
             config=vars(args),
             dir=output_dir,
         )
-        print(f"🪄 W&B tracking: {wandb.run.url}")
+        print(f"W&B tracking: {wandb.run.url}")
     else:
-        print("📝 Using only TensorBoard logging")
+        print("Using only TensorBoard logging")
+
+    print("Computing normalization parameters...")
+    normalization_params = compute_normalization_parameters(
+        args.local_data_dir,
+        max_files=args.max_files_train
+    )
+
+    if normalization_params is None:
+        print("Warning: Could not compute normalization parameters")
+    else:
+        print(f"Normalization: mean shape={normalization_params['mean'].shape}, std shape={normalization_params['std'].shape}")
+        feat_dim = normalization_params['mean'].shape[0]
+        print(f"Auto-detected feature dimension: {feat_dim}")
+
+    # Override feat_dim if provided
+    if args.feat_dim is not None:
+        feat_dim = args.feat_dim
+        print(f"Using user-specified feature dimension: {feat_dim}")
 
     print("Creating data loaders...")
 
-    # Determine if we're using local data or HuggingFace
-    use_local_data = args.local_data_dir is not None
+    # Create training dataset
+    train_dataset = GlobalNormalizedFlightDataset(
+        normalization_params=normalization_params,
+        data_dir=args.local_data_dir,
+        split="train",
+        seq_len=args.seq_len,
+        max_files=args.max_files_train,
+        seed=args.seed,
+        train_split=args.train_split,
+        val_split=args.val_split,
+        use_random_masking=args.use_random_masking,
+        masking_ratios=args.masking_ratios if args.use_random_masking else None,
+        mean_mask_lengths=args.mean_mask_lengths if args.use_random_masking else None,
+        masking_ratio=args.masking_ratio if not args.use_random_masking else 0.6,
+        mean_mask_length=args.mean_mask_length if not args.use_random_masking else 3,
+    )
 
-    if use_local_data:
-        print(f"Using local data from: {args.local_data_dir}")
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True if torch.cuda.is_available() else False,
+    )
 
-        # Auto-detect feature dimension from local data
-        try:
-            feat_dim = get_feature_dim_from_local_data(args.local_data_dir)
-            if feat_dim:
-                print(f"Auto-detected feature dimension: {feat_dim}")
-            else:
-                feat_dim = args.feat_dim
-                if feat_dim is None:
-                    print("Could not auto-detect feature dimension. Please specify --feat_dim")
-                    exit(1)
-        except Exception as e:
-            print(f"Error detecting feature dimension: {e}")
-            feat_dim = args.feat_dim
-            if feat_dim is None:
-                print("Please specify --feat_dim")
-                exit(1)
-    else:
-        print(f"Using HuggingFace dataset: {args.repo_id}")
+    # Create validation dataset
+    val_dataset = GlobalNormalizedFlightDataset(
+        normalization_params=normalization_params,
+        data_dir=args.local_data_dir,
+        split="validation",
+        seq_len=args.seq_len,
+        max_files=args.max_files_val,
+        seed=args.seed + 1,
+        train_split=args.train_split,
+        val_split=args.val_split,
+        use_random_masking=args.use_random_masking,
+        masking_ratios=args.masking_ratios if args.use_random_masking else None,
+        mean_mask_lengths=args.mean_mask_lengths if args.use_random_masking else None,
+        masking_ratio=args.masking_ratio if not args.use_random_masking else 0.6,
+        mean_mask_length=args.mean_mask_length if not args.use_random_masking else 3,
+    )
 
-        # Get feature dimension from a sample
-        try:
-            sample_loader = create_dataloader(
-                repo_id=args.repo_id,
-                split="train",
-                batch_size=1,
-                seq_len=args.seq_len,
-                max_files=1,
-                num_workers=0,
-                seed=args.seed,
-            )
-            x_sample, _, _ = next(iter(sample_loader))
-            feat_dim = x_sample.shape[-1]
-            print(f"Auto-detected feature dimension: {feat_dim}")
-        except Exception as e:
-            print(f"Could not auto-detect feature dimension: {e}")
-            feat_dim = args.feat_dim
-            if feat_dim is None:
-                print("Please specify --feat_dim")
-                exit(1)
-
-    # Create data loaders
-    if use_local_data:
-        train_loader = create_local_dataloader(
-            data_dir=args.local_data_dir,
-            split="train",
-            batch_size=args.batch_size,
-            seq_len=args.seq_len,
-            masking_ratio=args.masking_ratio,
-            mean_mask_length=args.mean_mask_length,
-            max_files=args.max_files_train,
-            num_workers=args.num_workers,
-            seed=args.seed,
-            train_split=args.train_split,
-            val_split=args.val_split,
-        )
-
-        val_loader = create_local_dataloader(
-            data_dir=args.local_data_dir,
-            split="validation",
-            batch_size=args.batch_size,
-            seq_len=args.seq_len,
-            masking_ratio=args.masking_ratio,
-            mean_mask_length=args.mean_mask_length,
-            max_files=args.max_files_val,
-            num_workers=args.num_workers,
-            seed=args.seed + 1,
-            train_split=args.train_split,
-            val_split=args.val_split,
-        )
-    else:
-        train_loader = create_dataloader(
-            repo_id=args.repo_id,
-            split="train",
-            batch_size=args.batch_size,
-            seq_len=args.seq_len,
-            masking_ratio=args.masking_ratio,
-            mean_mask_length=args.mean_mask_length,
-            max_files=args.max_files_train,
-            num_workers=args.num_workers,
-            seed=args.seed,
-        )
-
-        val_loader = create_dataloader(
-            repo_id=args.repo_id,
-            split="validation" if "validation" in ["train", "validation", "test"] else "train",
-            batch_size=args.batch_size,
-            seq_len=args.seq_len,
-            masking_ratio=args.masking_ratio,
-            mean_mask_length=args.mean_mask_length,
-            max_files=args.max_files_val,
-            num_workers=args.num_workers,
-            seed=args.seed + 1,
-        )
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True if torch.cuda.is_available() else False,
+    )
 
     print("Creating model...")
-    model = BertMaskedRegressor(
+    model = PatchTSTMaskedRegressor(
         feat_dim=feat_dim,
-        hidden_size=args.hidden_size,
+        seq_len=args.seq_len,
+        patch_len=args.patch_len,
+        stride=args.stride,
+        d_model=args.d_model,
+        n_heads=args.n_heads,
+        d_ff=args.d_ff,
         encoder_layers=args.encoder_layers,
         decoder_layers=args.decoder_layers,
-        num_heads=args.num_heads,
         dropout=args.dropout,
-        max_seq_len=args.seq_len,
     ).to(device)
 
     print(f"Model parameters: {count_parameters(model):,}")
 
-    # Log model to W&B
     if use_wandb:
         wandb.watch(model, log="all", log_freq=100)
         wandb.config.update({
             "model_parameters": str(count_parameters(model)),
-            # "feat_dim": str(feat_dim),
         })
 
     # Setup optimizer
@@ -375,7 +340,7 @@ def main():
     )
 
     # Estimate total steps
-    total_steps = args.epochs * 1000  # Rough estimate
+    total_steps = args.epochs * 1000
     scheduler = create_lr_scheduler(optimizer, args.warmup_steps, total_steps)
 
     print("Starting training...")
@@ -391,7 +356,6 @@ def main():
         epoch_mae_loss = 0.0
         epoch_samples = 0
 
-        # Create progress bar for this epoch
         pbar = tqdm(
             train_loader,
             desc=f"Epoch {epoch+1}/{args.epochs}",
@@ -404,25 +368,20 @@ def main():
             x_original = x_original.to(device)
             mask = mask.to(device)
 
-            # Forward pass
             optimizer.zero_grad()
             loss, mse_loss, mae_loss = model.compute_loss(x_masked, x_original, mask)
 
-            # Backward pass
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             scheduler.step()
 
-            # Update metrics
             epoch_loss += loss.item() * x_masked.size(0)
             epoch_mse_loss += mse_loss.item() * x_masked.size(0)
             epoch_mae_loss += mae_loss.item() * x_masked.size(0)
             epoch_samples += x_masked.size(0)
 
-            # Log training metrics
             if global_step % 100 == 0:
-                # Compute per-position metrics for current batch
                 masked_positions = (mask == 0).sum().item()
                 mse_per_position = mse_loss.item() / masked_positions if masked_positions > 0 else 0
                 mae_per_position = mae_loss.item() / masked_positions if masked_positions > 0 else 0
@@ -436,7 +395,6 @@ def main():
                 writer.add_scalar("train/lr", scheduler.get_last_lr()[0], global_step)
                 writer.add_scalar("train/masking_ratio", masking_ratio, global_step)
 
-                # W&B logging
                 if use_wandb:
                     wandb.log({
                         "train/loss": loss.item(),
@@ -450,7 +408,6 @@ def main():
                         "train/step": global_step,
                     }, step=global_step)
 
-            # Update progress bar with current metrics
             pbar.set_postfix({
                 "mse": f"{mse_loss.item():.4f}",
                 "mae": f"{mae_loss.item():.4f}",
@@ -459,7 +416,6 @@ def main():
                 "step": global_step,
             })
 
-            # Evaluation
             if global_step % args.eval_interval == 0 and global_step > 0:
                 pbar.write(f"\nEvaluating at step {global_step}...")
                 eval_metrics = evaluate_model(model, val_loader, device)
@@ -471,7 +427,6 @@ def main():
                 writer.add_scalar("eval/mae_per_position", eval_metrics["eval_mae_per_position"], global_step)
                 writer.add_scalar("eval/masked_positions", eval_metrics["eval_masked_positions"], global_step)
 
-                # W&B evaluation logging
                 if use_wandb:
                     wandb.log({
                         "eval/loss": eval_metrics["eval_loss"],
@@ -485,11 +440,9 @@ def main():
 
                 pbar.write(f"Step {global_step}: Eval loss = {eval_metrics['eval_loss']:.4f}, MSE/pos = {eval_metrics['eval_mse_per_position']:.4f}")
 
-                # Save best model
                 if eval_metrics["eval_loss"] < best_eval_loss:
                     best_eval_loss = eval_metrics["eval_loss"]
                     best_eval_mse_per_position = eval_metrics["eval_mse_per_position"]
-                    # Add feature dimension to args for model loading
                     save_args = vars(args).copy()
                     save_args['feat_dim'] = feat_dim
 
@@ -505,9 +458,7 @@ def main():
 
                 model.train()
 
-            # Save checkpoint
             if global_step % args.save_interval == 0 and global_step > 0:
-                # Add feature dimension to args for model loading
                 save_args = vars(args).copy()
                 save_args['feat_dim'] = feat_dim
 
@@ -521,11 +472,9 @@ def main():
 
             global_step += 1
 
-        # End of epoch
         avg_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0
         pbar.write(f"Epoch {epoch+1} completed - avg loss: {avg_loss:.4f}")
 
-        # Log epoch summary to W&B
         if use_wandb:
             wandb.log({
                 "epoch/avg_loss": avg_loss,
@@ -534,8 +483,6 @@ def main():
 
         pbar.close()
 
-    # Final save
-    # Add feature dimension to args for model loading
     save_args = vars(args).copy()
     save_args['feat_dim'] = feat_dim
 
@@ -551,7 +498,6 @@ def main():
     print(f"Best MSE per position: {best_eval_mse_per_position:.4f}")
     print(f"Models saved to: {output_dir}")
 
-    # Final W&B summary
     if use_wandb:
         wandb.summary["best_eval_loss"] = best_eval_loss
         wandb.summary["best_eval_mse_per_position"] = best_eval_mse_per_position
