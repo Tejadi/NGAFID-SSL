@@ -43,8 +43,8 @@ def parse_args():
                         help="Sequence length for flight windows")
     parser.add_argument("--max_files_train", type=int, default=None,
                         help="Maximum training files to use (None for all)")
-    parser.add_argument("--max_files_val", type=int, default=100,
-                        help="Maximum validation files to use")
+    parser.add_argument("--max_files_val", type=int, default=None,
+                        help="Maximum validation files to use (None for all)")
     parser.add_argument("--train_split", type=float, default=0.8,
                         help="Fraction of files for training")
     parser.add_argument("--val_split", type=float, default=0.1,
