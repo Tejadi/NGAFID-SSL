@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 from typing import Tuple
-from datasets.transformation_dataset import mask_transform
+from ngafid_datasets.transformation_dataset import mask_transform
 
 INPUT_COLS = ['vspdg',
               'e1egtdivergence',

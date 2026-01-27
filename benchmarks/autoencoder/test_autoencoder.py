@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
-from datasets.transformation_dataset import mask_transform, sequential_mask_transform
+from ngafid_datasets.transformation_dataset import mask_transform, sequential_mask_transform
 import argparse
 from tqdm import tqdm
 from utils import load_model, load_flight_data, plot_aircraft_type_comparison, plot_reconstructions, get_aircraft_counts, load_sequence_lengths, plot_sequential_reconstructions

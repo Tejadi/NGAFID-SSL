@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+import argparse
+import math
+from typing import List, Tuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
+from datasets import load_from_disk
+
+try:
+    from models.bart_autoencoder import BartAutoencoder
+except Exception:
+    from bart_autoencoder import BartAutoencoder
+
+from ngafid_datasets.transformation_dataset import mask_transform, sequential_mask_transform
+
+def make_toy_data(n_flights: int, timesteps: int, n_features: int, seed: int = 0) -> np.ndarray:
+    rng = np.random.default_rng(seed)
+    X = rng.normal(0, 1, (n_flights, timesteps, n_features)).cumsum(axis=1) / 50.0
+    return X.astype(np.float32)
+
+class ToyMaskedWindowDataset(Dataset):
+    def __init__(
+        self,
+        flights: np.ndarray,
+        seq_len: int = 256,
+        step: int = 256,
+        masking: str = "random",
+        masking_ratio: float = 0.6,
+        mean_mask_length: int = 3,
+        start_point: float = 0.5,
+        mask_length: int = 10,
+        seed: int = 0,
+    ):
+        self.X = flights
+        self.N, self.T, self.F = flights.shape
+        self.S = seq_len
+        self.P = step
+        self.masking = masking
+        self.masking_ratio = masking_ratio
+        self.mean_mask_length = mean_mask_length
+        self.start_point = start_point
+        self.mask_length = mask_length
+        self.seed = seed
+        self.index: List[Tuple[int, int]] = []
+        for i in range(self.N):
+            if self.T >= self.S:
+                num = 1 + (self.T - self.S) // self.P
+                self.index += [(i, j * self.P) for j in range(num)]
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def __getitem__(self, k: int):
+        i, s = self.index[k]
+        e = s + self.S
+        window_np = self.X[i, s:e, :]
+        if self.masking == "random":
+            X, masked_X, mask = mask_transform(
+                window_np,
+                masking_ratio=self.masking_ratio,
+                mean_mask_length=self.mean_mask_length,
+                mode="separate",
+                distribution="geometric",
+            )
+        else:
+            X, masked_X, mask = sequential_mask_transform(
+                window_np,
+                starting_point=self.start_point,
+                n=self.mask_length,
+                sequence_length=self.S,
+            )
+        return masked_X.unsqueeze(0), X.unsqueeze(0), mask.unsqueeze(0)
+
+def count_params(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n_flights",   type=int, default=8)
+    ap.add_argument("--timesteps",   type=int, default=3000)
+    ap.add_argument("--n_features",  type=int, default=44)
+    ap.add_argument("--seq_len",     type=int, default=256)
+    ap.add_argument("--step",        type=int, default=256)
+    ap.add_argument("--seed",        type=int, default=0)
+    ap.add_argument("--hf_dir", type=str, default="", help="Path to local HF dataset saved with save_to_disk")
+
+    ap.add_argument("--masking",     type=str, default="random", choices=["random", "sequential"])
+    ap.add_argument("--masking_ratio", type=float, default=0.6)
+    ap.add_argument("--mean_mask_length", type=int, default=3)
+    ap.add_argument("--start_point", type=float, default=0.5)
+    ap.add_argument("--mask_length", type=int, default=10)
+
+    ap.add_argument("--batch_size",  type=int, default=8)
+    ap.add_argument("--epochs",      type=int, default=3)
+    ap.add_argument("--lr",          type=float, default=1e-3)
+
+    ap.add_argument("--d_model",     type=int, default=128)
+    ap.add_argument("--num_heads",   type=int, default=8)
+    ap.add_argument("--num_encoder_layers", type=int, default=4)
+    ap.add_argument("--num_decoder_layers", type=int, default=4)
+    ap.add_argument("--ff_dim",      type=int, default=256)
+    ap.add_argument("--dropout",     type=float, default=0.1)
+    ap.add_argument("--max_len",     type=int, default=10000)
+    ap.add_argument("--bart_name",   type=str,  default="facebook/bart-base")
+    ap.add_argument("--latent_dim",  type=int,  default=128)
+
+    args = ap.parse_args()
+
+    if torch.backends.mps.is_available():
+        device = torch.device("mps")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda:0")
+    else:
+        device = torch.device("cpu")
+    print(f"[info] device: {device}")
+
+    if args.hf_dir:
+        print(f"[info] loading HF dataset from: {args.hf_dir}")
+        toy = load_from_disk(args.hf_dir).with_format("numpy", columns=["input"], output_all_columns=True)
+        inputs = [toy["train"][i]["input"][0] for i in range(len(toy["train"]))]
+        flights = np.stack(inputs, axis=0).astype(np.float32)
+        N, T, F = flights.shape
+        print(f"[info] loaded data shape = [n_flights={N}, timesteps={T}, n_features={F}]")
+    else:
+        print("[info] generating toy data…")
+        flights = make_toy_data(args.n_flights, args.timesteps, args.n_features, seed=args.seed)
+        N, T, F = flights.shape
+        print(f"[info] data shape = [n_flights={N}, timesteps={T}, n_features={F}]")
+
+    ds = ToyMaskedWindowDataset(
+        flights,
+        seq_len=args.seq_len,
+        step=args.step,
+        masking=args.masking,
+        masking_ratio=args.masking_ratio,
+        mean_mask_length=args.mean_mask_length,
+        start_point=args.start_point,
+        mask_length=args.mask_length,
+        seed=args.seed,
+    )
+    num_windows = len(ds)
+    num_batches = (num_windows + args.batch_size - 1) // args.batch_size
+    print(f"[info] windows/epoch: {num_windows}  |  batch_size: {args.batch_size}  |  ~batches/epoch: {num_batches}")
+
+    num_workers = 0 if device.type in ("cpu", "mps") else 2
+    pin_memory = device.type == "cuda"
+    loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True,
+                        num_workers=num_workers, pin_memory=pin_memory)
+
+    model = BartAutoencoder(
+        input_dim=args.n_features,
+        d_model=args.d_model,
+        num_heads=args.num_heads,
+        num_encoder_layers=args.num_encoder_layers,
+        num_decoder_layers=args.num_decoder_layers,
+        dim_feedforward=args.ff_dim,
+        dropout=args.dropout,
+        max_len=args.max_len,
+        bart_model_name=args.bart_name,
+        latent_dim=args.latent_dim,
+    ).to(device)
+    print(f"[info] model params (trainable): {count_params(model):,}")
+
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    criterion = nn.MSELoss(reduction="sum")
+
+    for epoch in range(1, args.epochs + 1):
+        print(f"\n[info] ===== Epoch {epoch}/{args.epochs} =====")
+        model.train()
+        total_loss = 0.0
+        total_elems = 0
+
+        pbar = tqdm(loader, desc=f"Epoch {epoch} / train", leave=False)
+        for step_i, (X_masked, X_orig, mask) in enumerate(pbar, 1):
+            X_masked = X_masked.to(device)
+            X_orig   = X_orig.to(device)
+            mask     = mask.to(device)
+
+            X_masked = X_masked.squeeze(1)
+            X_orig   = X_orig.squeeze(1)
+            mask     = mask.squeeze(1).float()
+
+            opt.zero_grad(set_to_none=True)
+            y = model(X_masked)
+
+            weight = (1.0 - mask)
+            loss = criterion(y * weight, X_orig * weight)
+
+            loss.backward()
+            opt.step()
+
+            total_loss  += loss.item()
+            total_elems += weight.sum().item()
+
+            if step_i % 25 == 0:
+                pbar.set_postfix({"running_mse(masked)": total_loss / max(total_elems, 1)})
+
+        avg = total_loss / max(total_elems, 1)
+        print(f"[info] epoch {epoch:02d}  MSE(masked) = {avg:.6f}")
+
+    print("[info] training finished ✅")
+
+if __name__ == "__main__":
+    main()

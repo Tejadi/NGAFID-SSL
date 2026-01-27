@@ -113,7 +113,7 @@ def graph2(df, pc1_col, pc2_col, hue_col, dr_type):
     plt.xlabel(pc1_col)
     plt.ylabel(pc2_col)
     plt.tight_layout()
-    plt.show()
+    plt.savefig('/home/aidan/Classes/figures/GATS-Cos/recent2.pdf')
     
    
 def graph(X_r, y, label_names, label_type):
@@ -130,4 +130,4 @@ def graph(X_r, y, label_names, label_type):
     plt.legend(loc="best", shadow=False, scatterpoints=1)
     plt.title("PCA of NGAFID dataset: " + label_type)
     plt.tight_layout()
-    plt.show()
+    plt.savefig('/home/aidan/Classes/figures/GATS-Cos/recent0.pdf')

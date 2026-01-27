@@ -1,6 +1,7 @@
 import argparse
 import torch
 import torch.backends.cudnn as cudnn
+import torch.nn.functional as F
 import pandas as pd
 import wandb
 
@@ -8,14 +9,15 @@ from datetime import datetime
 from torchvision import models
 from models.resnet_simclr import ResNetSimCLR
 from simclr import SimCLR
-from datasets.tf_idf import ScoreDatasetGenerator
-from datasets.flight_score_dataset import ScorePairDataset
+from ngafid_datasets.tf_idf import ScoreDatasetGenerator
+from ngafid_datasets.cos_similarity import ScoreDatasetGenerator
+from ngafid_datasets.flight_score_dataset import ScorePairDataset
+# from ngafid_datasets.flight_score_dataset import ScorePairDataset
 from sample_flights.combine_flight_data import flight_paths
-from datasets.default_iteration_dataset import DefaultIterationDataset
-from datasets.transformation_dataset import TransformationDataset, TransformationDatasetReverse
+from ngafid_datasets.default_iteration_dataset import DefaultIterationDataset
+from ngafid_datasets.transformation_dataset import TransformationDataset, TransformationDatasetReverse
 from clustering import visualize
 from utils import load_config
-
 
 # Load configuration
 config = load_config()
@@ -71,12 +73,47 @@ parser.add_argument('--job-name', type=str, required=False, dest='job_name',
 parser.add_argument('--disable-wandb', action='store_true',
                     help='Disable Weights & Biases logging')
 
-def dataloader_function(batch):
-    first_elements, second_elements = zip(*batch)
-    batch_combined = first_elements + second_elements
-    batch_combined = torch.stack(batch_combined, dim=0)
+def _ensure_tensor_3d(tensor_like):
+    if not isinstance(tensor_like, torch.Tensor):
+        tensor_like = torch.tensor(tensor_like)
+    if tensor_like.dim() == 1:
+        tensor_like = tensor_like.unsqueeze(-1)
+    if tensor_like.dim() == 2:
+        tensor_like = tensor_like.unsqueeze(0)
+    if tensor_like.dim() != 3:
+        raise ValueError(f"Expected a 3D tensor (C, T, F). Got shape {tensor_like.shape}.")
+    return tensor_like
 
-    return batch_combined
+
+def _pad_to_max_rows(tensors):
+    max_rows = max(t.shape[1] for t in tensors)
+    cols = {t.shape[2] for t in tensors}
+    if len(cols) != 1:
+        raise ValueError(f"Expected consistent feature counts. Got {sorted(cols)}.")
+    padded = []
+    for t in tensors:
+        pad_rows = max_rows - t.shape[1]
+        if pad_rows > 0:
+            t = F.pad(t, (0, 0, 0, pad_rows))
+        padded.append(t)
+    return padded
+
+
+def contrastive_collate_fn(batch):
+    first_elements, second_elements = zip(*batch)
+    batch_combined = list(first_elements + second_elements)
+    batch_combined = [_ensure_tensor_3d(item) for item in batch_combined]
+    batch_combined = _pad_to_max_rows(batch_combined)
+    return torch.stack(batch_combined, dim=0)
+
+
+def visualization_collate_fn(batch):
+    images, flight_ids = zip(*batch)
+    images = [_ensure_tensor_3d(item) for item in images]
+    images = _pad_to_max_rows(images)
+    images = torch.stack(images, dim=0)
+    flight_ids = torch.tensor(flight_ids, dtype=torch.long)
+    return images, flight_ids
 
 def get_pos_pairs(non_zero=False, scores=None):
     if scores is None:
@@ -128,7 +165,7 @@ def main():
     # assert args.n_views == 2, "Only two view training is supported. Please use --n-views 2."
     # check if gpu training is available
     if not args.disable_cuda and torch.cuda.is_available():
-        args.device = torch.device('cuda:0')
+        args.device = torch.device('cuda:1')
         cudnn.deterministic = True
         cudnn.benchmark = True
         args.gpu_index = 0
@@ -203,7 +240,7 @@ def main():
 
         with torch.cuda.device(args.gpu_index):
             visualization_loader = torch.utils.data.DataLoader(visualization_dataset, batch_size=batch_size, shuffle=True,
-                                num_workers=num_workers, pin_memory=True, drop_last=True)
+                                num_workers=num_workers, pin_memory=True, drop_last=True, collate_fn=visualization_collate_fn)
 
             optimizer = torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.weight_decay)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=len(visualization_loader), eta_min=0, last_epoch=-1)
@@ -216,13 +253,13 @@ def main():
 
     else:
         train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True,
-            num_workers=num_workers, pin_memory=True, drop_last=True, collate_fn=dataloader_function)
+            num_workers=num_workers, pin_memory=True, drop_last=True, collate_fn=contrastive_collate_fn)
         # test_loader = torch.utils.data.DataLoader(test_set, batch_size=args.batch_size, shuffle=True,
         #     num_workers=args.workers, pin_memory=True, drop_last=True)
         # val_loader = torch.utils.data.DataLoader(val_set, batch_size=args.batch_size, shuffle=True,
         #     num_workers=args.workers, pin_memory=True, drop_last=True)
         visualization_loader = torch.utils.data.DataLoader(visualization_dataset, batch_size=batch_size, shuffle=True,
-            num_workers=num_workers, pin_memory=True, drop_last=True, collate_fn=dataloader_function)
+            num_workers=num_workers, pin_memory=True, drop_last=True, collate_fn=visualization_collate_fn)
         
         
         model = ResNetSimCLR(base_model=args.arch, out_dim=args.out_dim)

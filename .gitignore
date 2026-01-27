@@ -2,3 +2,12 @@ NGAFID-LOCI-GenAV-Data/
 __pycache__/
 wandb/
 runs/
+NGAFID-LOCI-GATS-Data/
+bert_masked_regressor_runs/
+real_flight_data/
+synthetic_bert_runs/
+synthetic_flight_data/
+results/
+logs/
+checkpoints/
+figures/

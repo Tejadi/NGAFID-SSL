@@ -84,7 +84,7 @@ class GADataset(Dataset):
             self.data.append(flight)
 
     def _load_from_db(self, dataset_id: int):
-        flight_info = self.db.aselectn('Dataset_Contents', ['flight_id', 'aircraft_type', 'filename'], fetch_one=False, split=self.split)
+        flight_info = self.db.aselectn('Dataset_Contents', ['flight_id', 'aircraft_type', 'filename'], fetch_one=False, split=self.split, dataset_id=dataset_id)
         pbar = tqdm(flight_info, desc=f"Processing {len(flight_info)} flights for {self.split}", unit="flight")
         for fid, acft_type, fname in pbar:
             flight = Flight(fid, fname, acft_type)

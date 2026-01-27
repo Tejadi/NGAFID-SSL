@@ -43,8 +43,8 @@ def accuracy(output, target, topk=(1,)):
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
 
-def load_config():
-    config_path = Path(__file__).parent / 'new_env.yml'
+def load_config(file: str = 'env.yml'):
+    config_path = Path(__file__).parent / file
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
