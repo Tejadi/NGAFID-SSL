@@ -1,0 +1,581 @@
+#!/usr/bin/env python3
+"""
+Linear probe evaluation for anomaly classification.
+
+Evaluates representation quality of pre-trained models (SimCLR, BERT, LSTM, MLP)
+by training a logistic regression on frozen representations to classify
+whether a flight contains any anomaly event.
+"""
+
+import argparse
+import os
+import json
+import time
+import re
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from tqdm import tqdm
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import (
+    roc_auc_score, accuracy_score, precision_score,
+    recall_score, f1_score, classification_report
+)
+
+# SimCLR uses 41 specific features (from benchmarks/conv_mhsa/flight.py)
+SIMCLR_INPUT_COLS = [
+    'vspdg', 'e1egtdivergence', 'crs', 'vspdcalculated', 'trk', 'normac',
+    'altmsl', 'vspd', 'oat', 'hplwas', 'baroa', 'e1oilp', 'ias', 'latac',
+    'e1egt1', 'densityratio', 'e1oilt', 'altmsllagdiff', 'pitch', 'tas',
+    'fqtyr', 'totalfuel', 'trueairspeed(ft/min)', 'hplfd', 'magvar',
+    'e1egt2', 'altgps', 'amp1', 'fqtyl', 'volt1', 'e1fflow', 'altagl',
+    'altb', 'roll', 'stallindex', 'e1egt3', 'e1rpm', 'e1egt4', 'hdg',
+    'aoasimple', 'gndspd',
+]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Linear probe anomaly classification")
+    parser.add_argument("--model_type", type=str, required=True,
+                        choices=["simclr", "bert", "lstm", "mlp"],
+                        help="Type of pre-trained model")
+    parser.add_argument("--checkpoint", type=str, required=True,
+                        help="Path to model checkpoint")
+    parser.add_argument("--data_dir", type=str,
+                        default="/oscar/data/sbach/shared/ngafid",
+                        help="Root data directory")
+    parser.add_argument("--events_file", type=str,
+                        default="/oscar/data/sbach/bats/projects/ngafid/events.csv",
+                        help="Path to events.csv")
+    parser.add_argument("--output_dir", type=str,
+                        default="./linear_probe_results",
+                        help="Output directory for results")
+    parser.add_argument("--device", type=str, default="auto",
+                        help="Device (auto, cuda, cpu)")
+    parser.add_argument("--max_files", type=int, default=None,
+                        help="Max files per split (for debugging)")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed")
+    return parser.parse_args()
+
+
+def extract_flight_id(file_path: Path) -> Optional[int]:
+    """Extract flight ID from filename like Cessna_172S_flight_100.csv."""
+    name = file_path.stem  # e.g., Cessna_172S_flight_100
+    match = re.search(r'_flight_(\d+)', name)
+    if match:
+        return int(match.group(1))
+    # Fallback: last number in filename
+    numbers = re.findall(r'\d+', name)
+    if numbers:
+        return int(numbers[-1])
+    return None
+
+
+def load_event_flight_ids(events_file: str) -> Set[int]:
+    """Load set of flight IDs that have any anomaly event."""
+    df = pd.read_csv(events_file)
+    flight_ids = set(df['flight_id'].astype(int).unique())
+    print(f"Loaded {len(flight_ids)} flights with events from {events_file}")
+    return flight_ids
+
+
+def load_event_labels(events_file: str) -> Tuple[Set[int], Dict[str, Set[int]], List[str]]:
+    """Load binary and per-event-type labels.
+
+    Returns:
+        event_flight_ids: Set of all flight IDs with any event
+        event_type_flight_ids: Dict mapping event_name -> set of flight IDs
+        event_types: Sorted list of all event type names
+    """
+    df = pd.read_csv(events_file)
+    df['flight_id'] = df['flight_id'].astype(int)
+
+    event_flight_ids = set(df['flight_id'].unique())
+    event_types = sorted(df['name'].str.strip().unique())
+    event_type_flight_ids = {}
+    for et in event_types:
+        fids = set(df[df['name'].str.strip() == et]['flight_id'].unique())
+        event_type_flight_ids[et] = fids
+
+    print(f"Loaded {len(event_flight_ids)} flights with events, {len(event_types)} event types")
+    return event_flight_ids, event_type_flight_ids, event_types
+
+
+def get_split_files(data_dir: str, split: str) -> List[Path]:
+    """Get list of flight CSV files for a given split."""
+    split_dir = Path(data_dir) / "preprocessed_data" / split
+    if not split_dir.exists():
+        raise ValueError(f"Split directory not found: {split_dir}")
+    files = sorted(split_dir.glob("*.csv"))
+    return files
+
+
+def compute_normalization_params(data_dir: str, model_type: str, max_files: int = 500) -> Dict[str, np.ndarray]:
+    """Compute normalization parameters from training data."""
+    train_files = get_split_files(data_dir, "train")[:max_files]
+    all_data = []
+
+    for csv_file in tqdm(train_files, desc="Computing normalization"):
+        try:
+            df = pd.read_csv(csv_file, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
+            if model_type == "simclr":
+                available = [c for c in SIMCLR_INPUT_COLS if c in df.columns]
+                for c in SIMCLR_INPUT_COLS:
+                    if c not in df.columns:
+                        df[c] = 0.0
+                df = df[SIMCLR_INPUT_COLS]
+            else:
+                df = df.select_dtypes(include=[np.number])
+            df = df.ffill().bfill().fillna(0)
+            all_data.append(df.to_numpy(dtype=np.float32))
+        except Exception as e:
+            continue
+
+    concatenated = np.vstack(all_data)
+    mean = np.mean(concatenated, axis=0)
+    std = np.std(concatenated, axis=0)
+    std[std == 0] = 1.0
+    print(f"Normalization params computed over {len(all_data)} files, {concatenated.shape[1]} features")
+    return {'mean': mean, 'std': std}
+
+
+def load_flight_data(file_path: Path, model_type: str,
+                     normalization_params: Dict[str, np.ndarray]) -> np.ndarray:
+    """Load and preprocess a single flight for the given model type."""
+    df = pd.read_csv(file_path, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
+
+    if model_type == "simclr":
+        for c in SIMCLR_INPUT_COLS:
+            if c not in df.columns:
+                df[c] = 0.0
+        df = df[SIMCLR_INPUT_COLS]
+        seq_len = 4096
+    else:
+        df = df.select_dtypes(include=[np.number])
+        seq_len = 10000
+
+    df = df.ffill().bfill().fillna(0)
+    data = df.to_numpy(dtype=np.float32)
+
+    # Normalize
+    mean = normalization_params['mean']
+    std = normalization_params['std']
+    if mean.shape[0] == data.shape[1]:
+        data = (data - mean) / std
+
+    # Pad or truncate
+    if len(data) < seq_len:
+        if len(data) > 0:
+            pad = np.repeat(data[-1:], seq_len - len(data), axis=0)
+            data = np.vstack([data, pad])
+        else:
+            data = np.zeros((seq_len, data.shape[1]), dtype=np.float32)
+    else:
+        data = data[:seq_len]
+
+    return data
+
+
+# --- Model loading ---
+
+def load_simclr_model(checkpoint_path: str, device: torch.device):
+    from models.resnet_simclr import ResNetSimCLR
+    model = ResNetSimCLR("resnet18", out_dim=128)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt['state_dict'])
+    model.remove_projector()
+    model.to(device)
+    model.eval()
+    return model
+
+
+def load_bert_model(checkpoint_path: str, device: torch.device):
+    from models.bert_masked_regressor import BertMaskedRegressor
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    config = ckpt['config']
+    feat_dim = ckpt.get('feat_dim', 44)
+    model = BertMaskedRegressor(
+        feat_dim=feat_dim,
+        hidden_size=config['hidden_size'],
+        encoder_layers=config['encoder_layers'],
+        decoder_layers=config['decoder_layers'],
+        num_heads=config['num_heads'],
+        dropout=0.0,
+        max_seq_len=config.get('seq_len', 10000),
+        use_gradient_checkpointing=False,
+        use_mixed_precision=False,
+    )
+    model.load_state_dict(ckpt['model_state_dict'])
+    model.to(device)
+    model.eval()
+    return model
+
+
+def load_lstm_model(checkpoint_path: str, device: torch.device):
+    from models.lstm_baseline import LSTMBaseline, LSTMBaselineChunked
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    config = ckpt['config']
+    feat_dim = ckpt.get('feat_dim', 44)
+    use_chunked = config.get('use_chunked', False)
+    ModelClass = LSTMBaselineChunked if use_chunked else LSTMBaseline
+
+    kwargs = dict(
+        feat_dim=feat_dim,
+        hidden_size=config.get('hidden_size', 256),
+        num_layers=config.get('num_layers', 2),
+        dropout=0.0,
+        bidirectional=config.get('bidirectional', True),
+    )
+    if use_chunked:
+        kwargs['chunk_size'] = config.get('chunk_size', 2000)
+
+    model = ModelClass(**kwargs)
+    model.load_state_dict(ckpt['model_state_dict'])
+    model.to(device)
+    model.eval()
+    return model
+
+
+def load_mlp_model(checkpoint_path: str, device: torch.device):
+    from models.mlp_baseline import MLPBaseline
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    config = ckpt['config']
+    feat_dim = ckpt.get('feat_dim', 44)
+    model = MLPBaseline(
+        feat_dim=feat_dim,
+        hidden_sizes=config.get('hidden_sizes', [256, 512, 256]),
+        dropout=0.0,
+    )
+    model.load_state_dict(ckpt['model_state_dict'])
+    model.to(device)
+    model.eval()
+    return model
+
+
+def load_model(model_type: str, checkpoint_path: str, device: torch.device):
+    loaders = {
+        "simclr": load_simclr_model,
+        "bert": load_bert_model,
+        "lstm": load_lstm_model,
+        "mlp": load_mlp_model,
+    }
+    return loaders[model_type](checkpoint_path, device)
+
+
+# --- Representation extraction ---
+
+def extract_representation(model, model_type: str, flight_data: np.ndarray,
+                           device: torch.device) -> np.ndarray:
+    """Extract a flight-level representation vector from a pre-trained model."""
+    with torch.no_grad():
+        if model_type == "simclr":
+            # Input: (1, 1, 4096, 41) — 2D image-like
+            x = torch.tensor(flight_data, dtype=torch.float32)
+            x = x.unsqueeze(0).unsqueeze(0).to(device)  # (1, 1, 4096, 41)
+            rep = model(x)  # (1, 512) after GAP + Identity projector
+            return rep.cpu().numpy().squeeze()
+
+        elif model_type == "bert":
+            x = torch.tensor(flight_data, dtype=torch.float32)
+            x = x.unsqueeze(0).to(device)  # (1, 10000, 44)
+            encoded = model.encoder(x)  # (1, 10000, 1024)
+            rep = encoded.mean(dim=1)  # (1, 1024)
+            return rep.cpu().numpy().squeeze()
+
+        elif model_type == "lstm":
+            x = torch.tensor(flight_data, dtype=torch.float32)
+            x = x.unsqueeze(0).to(device)  # (1, 10000, 44)
+            projected = model.input_proj(x)
+            # Process in chunks to avoid memory issues
+            chunk_size = getattr(model, 'chunk_size', 2000) or 2000
+            chunks = []
+            for start in range(0, projected.shape[1], chunk_size):
+                chunk = projected[:, start:start + chunk_size, :]
+                chunk_out, _ = model.lstm(chunk)
+                chunks.append(chunk_out)
+            lstm_out = torch.cat(chunks, dim=1)  # (1, 10000, 512)
+            rep = lstm_out.mean(dim=1)  # (1, 512)
+            return rep.cpu().numpy().squeeze()
+
+        elif model_type == "mlp":
+            x = torch.tensor(flight_data, dtype=torch.float32)
+            x = x.unsqueeze(0).to(device)  # (1, 10000, 44)
+            # Extract penultimate hidden layer (all layers except final Linear)
+            intermediate = nn.Sequential(*list(model.mlp.children())[:-1])
+            intermediate.to(device)
+            batch_size, seq_len, feat_dim = x.shape
+            x_flat = x.reshape(-1, feat_dim)  # (10000, 44)
+            hidden = intermediate(x_flat)  # (10000, 256)
+            hidden = hidden.reshape(batch_size, seq_len, -1)  # (1, 10000, 256)
+            rep = hidden.mean(dim=1)  # (1, 256)
+            return rep.cpu().numpy().squeeze()
+
+
+def extract_all_representations(
+    model, model_type: str, data_dir: str, split: str,
+    event_flight_ids: Set[int], event_type_flight_ids: Dict[str, Set[int]],
+    event_types: List[str], normalization_params: Dict,
+    device: torch.device, max_files: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[int]]:
+    """Extract representations and labels for all flights in a split.
+
+    Returns:
+        X: representations (N, repr_dim)
+        y_binary: binary labels (N,)
+        y_multilabel: multi-label matrix (N, num_event_types)
+        flight_ids: list of flight IDs
+    """
+    files = get_split_files(data_dir, split)
+    if max_files is not None:
+        files = files[:max_files]
+
+    representations = []
+    binary_labels = []
+    multilabel_rows = []
+    flight_ids = []
+    skipped = 0
+
+    for file_path in tqdm(files, desc=f"Extracting {split} representations"):
+        fid = extract_flight_id(file_path)
+        if fid is None:
+            skipped += 1
+            continue
+
+        try:
+            flight_data = load_flight_data(file_path, model_type, normalization_params)
+            rep = extract_representation(model, model_type, flight_data, device)
+            binary_label = 1 if fid in event_flight_ids else 0
+            multi_label = [1 if fid in event_type_flight_ids[et] else 0 for et in event_types]
+
+            representations.append(rep)
+            binary_labels.append(binary_label)
+            multilabel_rows.append(multi_label)
+            flight_ids.append(fid)
+        except Exception as e:
+            print(f"Error processing {file_path.name}: {e}")
+            skipped += 1
+            continue
+
+        # Clear GPU cache periodically
+        if len(representations) % 100 == 0 and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if skipped > 0:
+        print(f"Skipped {skipped} flights in {split}")
+
+    X = np.stack(representations)
+    y_binary = np.array(binary_labels)
+    y_multilabel = np.array(multilabel_rows)
+    return X, y_binary, y_multilabel, flight_ids
+
+
+def train_and_evaluate_probe(
+    X_train: np.ndarray, y_train: np.ndarray,
+    X_test: np.ndarray, y_test: np.ndarray,
+    seed: int = 42,
+) -> Dict:
+    """Train logistic regression probe and evaluate."""
+    # Scale features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Train classifier
+    clf = LogisticRegression(
+        max_iter=1000,
+        solver='lbfgs',
+        random_state=seed,
+        class_weight='balanced',
+        C=1.0,
+    )
+    clf.fit(X_train_scaled, y_train)
+
+    # Predict
+    y_pred = clf.predict(X_test_scaled)
+    y_prob = clf.predict_proba(X_test_scaled)[:, 1]
+
+    # Compute metrics
+    metrics = {
+        "roc_auc": float(roc_auc_score(y_test, y_prob)),
+        "accuracy": float(accuracy_score(y_test, y_pred)),
+        "precision": float(precision_score(y_test, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_test, y_pred, zero_division=0)),
+        "f1": float(f1_score(y_test, y_pred, zero_division=0)),
+    }
+
+    return metrics
+
+
+def evaluate_per_event_type(
+    X_train: np.ndarray, y_train_multi: np.ndarray,
+    X_test: np.ndarray, y_test_multi: np.ndarray,
+    event_types: List[str], seed: int = 42,
+    min_positive_samples: int = 5,
+) -> Dict:
+    """Train one binary classifier per event type and evaluate each."""
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    per_event_results = {}
+    for i, et in enumerate(event_types):
+        y_tr = y_train_multi[:, i]
+        y_te = y_test_multi[:, i]
+
+        # Skip event types with too few positive samples
+        if y_tr.sum() < min_positive_samples or y_te.sum() < min_positive_samples:
+            per_event_results[et] = {
+                "skipped": True,
+                "reason": f"too few positives (train={int(y_tr.sum())}, test={int(y_te.sum())})",
+            }
+            continue
+
+        clf = LogisticRegression(
+            max_iter=1000, solver='lbfgs', random_state=seed,
+            class_weight='balanced', C=1.0,
+        )
+        clf.fit(X_train_scaled, y_tr)
+
+        y_pred = clf.predict(X_test_scaled)
+        y_prob = clf.predict_proba(X_test_scaled)[:, 1]
+
+        per_event_results[et] = {
+            "skipped": False,
+            "roc_auc": float(roc_auc_score(y_te, y_prob)),
+            "accuracy": float(accuracy_score(y_te, y_pred)),
+            "precision": float(precision_score(y_te, y_pred, zero_division=0)),
+            "recall": float(recall_score(y_te, y_pred, zero_division=0)),
+            "f1": float(f1_score(y_te, y_pred, zero_division=0)),
+            "train_positives": int(y_tr.sum()),
+            "test_positives": int(y_te.sum()),
+        }
+
+    # Compute macro-average ROC-AUC over non-skipped events
+    aucs = [v["roc_auc"] for v in per_event_results.values() if not v.get("skipped")]
+    macro_auc = float(np.mean(aucs)) if aucs else 0.0
+
+    return {
+        "macro_roc_auc": macro_auc,
+        "num_evaluated": len(aucs),
+        "num_skipped": len(event_types) - len(aucs),
+        "per_event": per_event_results,
+    }
+
+
+def main():
+    args = parse_args()
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+
+    # Device setup
+    if args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(args.device)
+    print(f"Using device: {device}")
+
+    print("=" * 60)
+    print(f"Linear Probe Evaluation: {args.model_type.upper()}")
+    print(f"Checkpoint: {args.checkpoint}")
+    print("=" * 60)
+
+    # Load event labels
+    event_flight_ids, event_type_flight_ids, event_types = load_event_labels(args.events_file)
+
+    # Compute normalization parameters
+    print("Computing normalization parameters...")
+    norm_params = compute_normalization_params(args.data_dir, args.model_type)
+
+    # Load model
+    print(f"Loading {args.model_type} model...")
+    model = load_model(args.model_type, args.checkpoint, device)
+    print("Model loaded.")
+
+    # Extract representations
+    print("\nExtracting train representations...")
+    X_train, y_train, y_train_multi, train_ids = extract_all_representations(
+        model, args.model_type, args.data_dir, "train",
+        event_flight_ids, event_type_flight_ids, event_types,
+        norm_params, device, args.max_files,
+    )
+    print(f"Train: {len(y_train)} flights, {y_train.sum()} with events "
+          f"({y_train.mean():.1%}), repr dim: {X_train.shape[1]}")
+
+    print("\nExtracting test representations...")
+    X_test, y_test, y_test_multi, test_ids = extract_all_representations(
+        model, args.model_type, args.data_dir, "test",
+        event_flight_ids, event_type_flight_ids, event_types,
+        norm_params, device, args.max_files,
+    )
+    print(f"Test: {len(y_test)} flights, {y_test.sum()} with events "
+          f"({y_test.mean():.1%}), repr dim: {X_test.shape[1]}")
+
+    # Binary classification
+    print("\nTraining binary linear probe...")
+    binary_metrics = train_and_evaluate_probe(X_train, y_train, X_test, y_test, args.seed)
+
+    print("\n" + "=" * 60)
+    print("Binary Anomaly Classification Results:")
+    print(f"  ROC-AUC:   {binary_metrics['roc_auc']:.4f}")
+    print(f"  Accuracy:  {binary_metrics['accuracy']:.4f}")
+    print(f"  Precision: {binary_metrics['precision']:.4f}")
+    print(f"  Recall:    {binary_metrics['recall']:.4f}")
+    print(f"  F1:        {binary_metrics['f1']:.4f}")
+    print("=" * 60)
+
+    # Per-event-type classification
+    print("\nTraining per-event-type classifiers...")
+    multilabel_results = evaluate_per_event_type(
+        X_train, y_train_multi, X_test, y_test_multi,
+        event_types, args.seed,
+    )
+
+    print(f"\nPer-Event-Type Results (macro ROC-AUC: {multilabel_results['macro_roc_auc']:.4f}):")
+    print(f"  Evaluated: {multilabel_results['num_evaluated']}, "
+          f"Skipped: {multilabel_results['num_skipped']}")
+    print(f"  {'Event Type':<35} {'ROC-AUC':>8} {'F1':>8} {'Train+':>7} {'Test+':>7}")
+    print(f"  {'-'*35} {'-'*8} {'-'*8} {'-'*7} {'-'*7}")
+    for et in event_types:
+        r = multilabel_results['per_event'][et]
+        if r.get('skipped'):
+            print(f"  {et:<35} {'SKIP':>8} {'':>8} {'':>7} {'':>7}  ({r['reason']})")
+        else:
+            print(f"  {et:<35} {r['roc_auc']:>8.4f} {r['f1']:>8.4f} {r['train_positives']:>7} {r['test_positives']:>7}")
+
+    # Save results
+    os.makedirs(args.output_dir, exist_ok=True)
+    results = {
+        "model_type": args.model_type,
+        "checkpoint": args.checkpoint,
+        "representation_dim": int(X_train.shape[1]),
+        "train_flights": int(len(y_train)),
+        "test_flights": int(len(y_test)),
+        "train_positive_rate": float(y_train.mean()),
+        "test_positive_rate": float(y_test.mean()),
+        "binary_metrics": binary_metrics,
+        "multilabel_results": multilabel_results,
+        "event_types": event_types,
+        "classifier_config": {
+            "type": "LogisticRegression",
+            "solver": "lbfgs",
+            "max_iter": 1000,
+            "class_weight": "balanced",
+            "C": 1.0,
+        },
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+
+    output_file = os.path.join(args.output_dir, f"{args.model_type}_anomaly_probe.json")
+    with open(output_file, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to: {output_file}")
+
+
+if __name__ == "__main__":
+    main()

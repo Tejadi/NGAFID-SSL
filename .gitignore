@@ -11,3 +11,10 @@ results/
 logs/
 checkpoints/
 figures/
+anomaly_detection_results/
+baseline_runs/
+bert_forecaster_runs/
+linear_probe_results/
+forecasting_eval_results/
+KEEP_THESE_CHECKPOINTS/
+tfidf_benchmark_results/

@@ -13,7 +13,11 @@ import argparse
 import os
 import time
 import json
+import gc
 from typing import Dict, Any, Optional
+
+# Set CUDA memory allocation configuration
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 import torch
 import torch.nn as nn
@@ -92,11 +96,21 @@ def parse_args():
     parser.add_argument("--save_interval", type=int, default=5000,
                         help="Model save interval in steps")
 
-    # arguments
+    # Masking arguments
     parser.add_argument("--masking_ratio", type=float, default=0.6,
                         help="Ratio of values to mask")
     parser.add_argument("--mean_mask_length", type=int, default=3,
                         help="Average length of masked segments")
+
+    # Memory optimization arguments
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=4,
+                        help="Gradient accumulation steps (effective batch = batch_size * this)")
+    parser.add_argument("--use_mixed_precision", action="store_true", default=True,
+                        help="Use mixed precision (FP16) training")
+    parser.add_argument("--use_gradient_checkpointing", action="store_true", default=True,
+                        help="Use gradient checkpointing to save memory")
+    parser.add_argument("--save_every_n_epochs", type=int, default=5,
+                        help="Save checkpoint every N epochs")
 
     # System arguments
     parser.add_argument("--device", type=str, default="auto",
@@ -355,9 +369,17 @@ def main():
         num_heads=args.num_heads,
         dropout=args.dropout,
         max_seq_len=args.seq_len,
+        use_gradient_checkpointing=args.use_gradient_checkpointing,
+        use_mixed_precision=args.use_mixed_precision,
     ).to(device)
 
     print(f"Model parameters: {count_parameters(model):,}")
+    print(f"Memory optimizations: mixed_precision={args.use_mixed_precision}, "
+          f"gradient_checkpointing={args.use_gradient_checkpointing}, "
+          f"gradient_accumulation={args.gradient_accumulation_steps}")
+
+    # Setup mixed precision scaler
+    scaler = torch.cuda.amp.GradScaler() if args.use_mixed_precision and torch.cuda.is_available() else None
 
     # Log model to W&B
     if use_wandb:
@@ -383,6 +405,13 @@ def main():
     global_step = 0
     best_eval_loss = float('inf')
     best_eval_mse_per_position = float('inf')
+    accumulation_step = 0
+
+    # Epochs to save checkpoints
+    save_epochs = list(range(args.save_every_n_epochs, args.epochs + 1, args.save_every_n_epochs))
+    if args.epochs not in save_epochs:
+        save_epochs.append(args.epochs)
+    print(f"Will save checkpoints at epochs: {save_epochs}")
 
     for epoch in range(args.epochs):
         model.train()
@@ -399,29 +428,55 @@ def main():
             leave=True
         )
 
+        optimizer.zero_grad()
+
         for batch_idx, (x_masked, x_original, mask) in enumerate(pbar):
-            x_masked = x_masked.to(device)
-            x_original = x_original.to(device)
-            mask = mask.to(device)
+            x_masked = x_masked.to(device, non_blocking=True)
+            x_original = x_original.to(device, non_blocking=True)
+            mask = mask.to(device, non_blocking=True)
 
-            # Forward pass
-            optimizer.zero_grad()
-            loss, mse_loss, mae_loss = model.compute_loss(x_masked, x_original, mask)
+            # Forward pass with optional mixed precision
+            if args.use_mixed_precision and scaler is not None:
+                with torch.cuda.amp.autocast():
+                    loss, mse_loss, mae_loss = model.compute_loss(x_masked, x_original, mask, scaler=scaler)
+                    loss = loss / args.gradient_accumulation_steps
+                scaler.scale(loss).backward()
+            else:
+                loss, mse_loss, mae_loss = model.compute_loss(x_masked, x_original, mask)
+                loss = loss / args.gradient_accumulation_steps
+                loss.backward()
 
-            # Backward pass
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
+            accumulation_step += 1
 
-            # Update metrics
-            epoch_loss += loss.item() * x_masked.size(0)
+            # Optimizer step after accumulation
+            if accumulation_step % args.gradient_accumulation_steps == 0:
+                if args.use_mixed_precision and scaler is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+
+                optimizer.zero_grad()
+                scheduler.step()
+                global_step += 1
+
+            # Clear cache periodically
+            if batch_idx % 100 == 0 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+
+            # Update metrics (undo the accumulation scaling for logging)
+            actual_loss = loss.item() * args.gradient_accumulation_steps
+            epoch_loss += actual_loss * x_masked.size(0)
             epoch_mse_loss += mse_loss.item() * x_masked.size(0)
             epoch_mae_loss += mae_loss.item() * x_masked.size(0)
             epoch_samples += x_masked.size(0)
 
-            # Log training metrics
-            if global_step % 100 == 0:
+            # Log training metrics (only after optimizer step)
+            if accumulation_step % args.gradient_accumulation_steps == 0 and global_step % 100 == 0:
                 # Compute per-position metrics for current batch
                 masked_positions = (mask == 0).sum().item()
                 mse_per_position = mse_loss.item() / masked_positions if masked_positions > 0 else 0
@@ -459,8 +514,8 @@ def main():
                 "step": global_step,
             })
 
-            # Evaluation
-            if global_step % args.eval_interval == 0 and global_step > 0:
+            # Evaluation (only after optimizer step)
+            if accumulation_step % args.gradient_accumulation_steps == 0 and global_step % args.eval_interval == 0 and global_step > 0:
                 pbar.write(f"\nEvaluating at step {global_step}...")
                 eval_metrics = evaluate_model(model, val_loader, device)
 
@@ -505,8 +560,8 @@ def main():
 
                 model.train()
 
-            # Save checkpoint
-            if global_step % args.save_interval == 0 and global_step > 0:
+            # Save checkpoint (step-based)
+            if accumulation_step % args.gradient_accumulation_steps == 0 and global_step % args.save_interval == 0 and global_step > 0:
                 # Add feature dimension to args for model loading
                 save_args = vars(args).copy()
                 save_args['feat_dim'] = feat_dim
@@ -519,11 +574,26 @@ def main():
                     'args': save_args,
                 }, os.path.join(output_dir, f"checkpoint_{global_step}.pt"))
 
-            global_step += 1
-
         # End of epoch
         avg_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0
         pbar.write(f"Epoch {epoch+1} completed - avg loss: {avg_loss:.4f}")
+
+        # Save epoch checkpoint
+        if (epoch + 1) in save_epochs:
+            save_args = vars(args).copy()
+            save_args['feat_dim'] = feat_dim
+            epoch_checkpoint_path = os.path.join(output_dir, f"model_epoch_{epoch+1}.pt")
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'global_step': global_step,
+                'epoch': epoch + 1,
+                'eval_loss': best_eval_loss,
+                'args': save_args,
+                'feat_dim': feat_dim,
+            }, epoch_checkpoint_path)
+            pbar.write(f"Saved epoch {epoch+1} checkpoint to {epoch_checkpoint_path}")
 
         # Log epoch summary to W&B
         if use_wandb:
