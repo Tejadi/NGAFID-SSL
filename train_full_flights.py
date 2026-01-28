@@ -483,6 +483,10 @@ def main():
                         help="W&B entity/team name")
     parser.add_argument("--no_wandb", action="store_true",
                         help="Disable W&B logging")
+    parser.add_argument("--data_dir", type=str, default="/oscar/data/sbach/shared/ngafid",
+                        help="Path to data directory (parent of preprocessed_data/)")
+    parser.add_argument("--checkpoint_dir", type=str, default=None,
+                        help="Directory to save model checkpoints (default: ./checkpoints/bert_models_<timestamp>)")
 
     # Data filtering arguments
     parser.add_argument("--aircraft_type", type=str, nargs='+', default=None,
@@ -510,7 +514,7 @@ def main():
     print("=" * 60)
 
     # Dataset and model configuration
-    data_dir = "/oscar/data/sbach/shared/ngafid"
+    data_dir = args.data_dir
     seq_len = 10000  # Full flight sequences (non-negotiable)
     batch_size = 4   # Ultra-conservative for seq_len=10000
     gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
@@ -528,7 +532,7 @@ def main():
     warmup_steps = 1000  # Reduced proportionally
     eval_interval = 500  # More frequent evaluation
     save_interval = 2000
-    max_files_train = 400  # Reduced for faster epochs
+    max_files_train = None  # Use all available files
     max_files_val = 100
 
     # Memory optimization settings
@@ -638,7 +642,7 @@ def main():
 
         # Use fixed masking for validation (for consistent evaluation)
         # Use dedicated validation directory if it exists
-        val_data_dir = "/oscar/data/sbach/shared/ngafid/preprocessed_data/val"
+        val_data_dir = os.path.join(data_dir, "preprocessed_data", "val")
         if not os.path.exists(val_data_dir):
             print(f"⚠️  Validation directory {val_data_dir} not found, using splits from main data")
             val_data_dir = data_dir
@@ -797,7 +801,10 @@ def main():
 
     # Create save directory for this training run in local checkpoints folder
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    save_dir = f"/oscar/home/cduong5/NGAFID-SSL/checkpoints/bert_models_{timestamp}"
+    if args.checkpoint_dir is not None:
+        save_dir = args.checkpoint_dir
+    else:
+        save_dir = f"./checkpoints/bert_models_{timestamp}"
     os.makedirs(save_dir, exist_ok=True)
     print(f"💾 Models will be saved to: {save_dir}")
 

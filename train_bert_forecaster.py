@@ -63,7 +63,7 @@ def parse_args():
                         help="Directory containing flight CSV files")
     parser.add_argument("--seq_len", type=int, default=10000,
                         help="Sequence length (flights padded to this)")
-    parser.add_argument("--max_files_train", type=int, default=400,
+    parser.add_argument("--max_files_train", type=int, default=None,
                         help="Maximum training files")
     parser.add_argument("--max_files_val", type=int, default=100,
                         help="Maximum validation files")
