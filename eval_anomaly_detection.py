@@ -24,6 +24,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sklearn.metrics import (
     roc_auc_score,
     precision_recall_curve,
@@ -405,7 +406,8 @@ def compute_reconstruction_error_batched(
     original_lengths: List[int],
     device: torch.device,
     mask_ratio: float = 0.15,
-    num_samples: int = 5
+    num_samples: int = 5,
+    use_amp: bool = True
 ) -> List[np.ndarray]:
     """
     Compute per-timestep reconstruction error for a batch of flights.
@@ -420,6 +422,7 @@ def compute_reconstruction_error_batched(
         device: torch device
         mask_ratio: Ratio of features to mask
         num_samples: Number of mask samples to average over
+        use_amp: Whether to use automatic mixed precision
 
     Returns:
         List of reconstruction error arrays, one per flight (trimmed to original length)
@@ -427,35 +430,37 @@ def compute_reconstruction_error_batched(
     batch_size = len(flight_data_batch)
     seq_len, feat_dim = flight_data_batch[0].shape
 
-    # Stack into batch tensor
-    x_original = torch.tensor(
-        np.stack(flight_data_batch, axis=0),
-        dtype=torch.float32
-    ).to(device)  # (batch_size, seq_len, feat_dim)
+    # Stack into batch tensor and move to GPU
+    x_original = torch.from_numpy(
+        np.stack(flight_data_batch, axis=0)
+    ).to(device, dtype=torch.float32, non_blocking=True)  # (batch_size, seq_len, feat_dim)
 
-    all_errors = []
+    # Accumulate errors on GPU to avoid CPU-GPU sync per sample
+    accumulated_errors = torch.zeros(batch_size, seq_len, device=device, dtype=torch.float32)
 
     with torch.no_grad():
         for _ in range(num_samples):
-            # Create random mask (1 = keep, 0 = mask)
-            mask = (torch.rand(batch_size, seq_len, feat_dim) > mask_ratio).float().to(device)
+            # Create random mask directly on GPU (1 = keep, 0 = mask)
+            mask = (torch.rand(batch_size, seq_len, feat_dim, device=device) > mask_ratio).float()
 
             # Create masked input
             x_masked = x_original * mask
 
-            # Get reconstruction
-            reconstruction = model(x_masked)
+            # Get reconstruction with optional AMP
+            if use_amp and device.type == 'cuda':
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                    reconstruction = model(x_masked)
+                    # Compute error in mixed precision
+                    error = (reconstruction - x_original) ** 2
+            else:
+                reconstruction = model(x_masked)
+                error = (reconstruction - x_original) ** 2
 
-            # Compute per-position error
-            error = (reconstruction - x_original) ** 2
+            # Average across features for per-timestep error and accumulate
+            accumulated_errors += error.mean(dim=-1)
 
-            # Average across features for per-timestep error
-            timestep_error = error.mean(dim=-1).cpu().numpy()  # (batch_size, seq_len)
-
-            all_errors.append(timestep_error)
-
-    # Average across samples: (num_samples, batch_size, seq_len) -> (batch_size, seq_len)
-    avg_errors = np.mean(all_errors, axis=0)
+    # Average across samples (single CPU transfer at the end)
+    avg_errors = (accumulated_errors / num_samples).cpu().numpy()
 
     # Trim each flight to its original length
     results = []
@@ -570,8 +575,12 @@ def main():
                         help='Maximum number of files to evaluate')
 
     # Evaluation parameters
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=32,
                         help='Batch size for evaluation (higher = faster but more GPU memory)')
+    parser.add_argument('--no_amp', action='store_true',
+                        help='Disable automatic mixed precision (AMP)')
+    parser.add_argument('--no_compile', action='store_true',
+                        help='Disable torch.compile() optimization')
 
     # Output parameters
     parser.add_argument('--output_dir', type=str, default='./anomaly_detection_results',
@@ -626,6 +635,33 @@ def main():
     num_params = sum(p.numel() for p in model.parameters())
     print(f"  Model parameters: {num_params:,}")
 
+    # Enable cudnn benchmark for consistent input sizes
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
+    # Compile model for faster inference (PyTorch 2.0+)
+    if not args.no_compile and hasattr(torch, 'compile'):
+        print("  Compiling model with torch.compile()...")
+        model = torch.compile(model, mode='reduce-overhead')
+
+    use_amp = not args.no_amp and torch.cuda.is_available()
+    if use_amp:
+        print(f"  Using automatic mixed precision (bfloat16)")
+
+    # Warmup pass to initialize CUDA kernels and trigger compilation
+    if torch.cuda.is_available():
+        print("  Running warmup pass...")
+        warmup_seq_len = model_config.get('max_seq_len', 10000)
+        dummy_input = torch.randn(1, warmup_seq_len, feat_dim, device=device)
+        with torch.no_grad():
+            if use_amp:
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                    _ = model(dummy_input)
+            else:
+                _ = model(dummy_input)
+        torch.cuda.synchronize()
+        del dummy_input
+
     # Load events
     events_df = load_events(args.events_file)
     events_by_flight = events_df.groupby('flight_id')
@@ -651,32 +687,42 @@ def main():
         if flight_id is not None:
             flight_metadata.append((file_path, flight_id))
 
-    # Process in batches
+    # Helper function for parallel data loading
+    def load_flight_data(args_tuple):
+        file_path, flight_id, norm_params, seq_length = args_tuple
+        try:
+            flight_data, original_length = load_and_normalize_flight(
+                file_path, norm_params, seq_length
+            )
+            return (flight_id, flight_data, original_length, None)
+        except Exception as e:
+            return (flight_id, None, None, str(e))
+
+    # Process in batches with parallel data loading
     num_batches = (len(flight_metadata) + args.batch_size - 1) // args.batch_size
+    num_workers = min(8, os.cpu_count() or 4)  # Limit parallel workers
 
     for batch_idx in tqdm(range(num_batches), desc="Evaluating batches"):
         batch_start = batch_idx * args.batch_size
         batch_end = min(batch_start + args.batch_size, len(flight_metadata))
         batch_metadata = flight_metadata[batch_start:batch_end]
 
-        # Load all flights in this batch
+        # Load all flights in this batch in parallel
         batch_data = []
         batch_lengths = []
         batch_flight_ids = []
-        valid_indices = []
 
-        for i, (file_path, flight_id) in enumerate(batch_metadata):
-            try:
-                flight_data, original_length = load_and_normalize_flight(
-                    file_path, normalization_params, seq_len
-                )
-                batch_data.append(flight_data)
-                batch_lengths.append(original_length)
-                batch_flight_ids.append(flight_id)
-                valid_indices.append(i)
-            except Exception as e:
-                print(f"Error loading {file_path}: {e}")
+        load_args = [(fp, fid, normalization_params, seq_len) for fp, fid in batch_metadata]
+
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            results = list(executor.map(load_flight_data, load_args))
+
+        for flight_id, flight_data, original_length, error in results:
+            if error is not None:
                 continue
+            batch_data.append(flight_data)
+            batch_lengths.append(original_length)
+            batch_flight_ids.append(flight_id)
 
         if not batch_data:
             continue
@@ -685,7 +731,8 @@ def main():
         batch_errors = compute_reconstruction_error_batched(
             model, batch_data, batch_lengths, device,
             mask_ratio=args.mask_ratio,
-            num_samples=args.num_mask_samples
+            num_samples=args.num_mask_samples,
+            use_amp=use_amp
         )
 
         # Process results and get ground truth
