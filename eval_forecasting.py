@@ -413,7 +413,7 @@ def evaluate_model(model, test_data, flight_ids, sequence_lengths, normalization
                    physics_eval=False, feature_map=None, dynamics=None, lambda_control=0.01,
                    max_physics_samples=100, compute_gt_baseline=True, physics_workers=8,
                    feature_map_preset='ngafid_44col', aircraft_preset='cessna172s',
-                   causal_mask=False):
+                   causal_mask=False, model_type='bert'):
     """
     Evaluate model on forecasting task.
 
@@ -432,6 +432,7 @@ def evaluate_model(model, test_data, flight_ids, sequence_lengths, normalization
         dynamics: AircraftDynamics for physics evaluation
         lambda_control: Control regularization weight for physics
         causal_mask: If True, apply causal attention mask (BERT can only see past)
+        model_type: Type of model ('bert', 'lstm', 'mlp')
 
     Returns:
         Dictionary of metrics
@@ -508,8 +509,11 @@ def evaluate_model(model, test_data, flight_ids, sequence_lengths, normalization
                     batch_size_actual, 1, seq_len, seq_len
                 )
 
-            # Forward pass
-            reconstruction = model(X_masked, attention_mask=attn_mask)
+            # Forward pass - only pass attention_mask for BERT models
+            if model_type == 'bert':
+                reconstruction = model(X_masked, attention_mask=attn_mask)
+            else:
+                reconstruction = model(X_masked)
 
             # Compute metrics
             X_np = X.cpu().numpy()
@@ -785,6 +789,7 @@ def main():
         feature_map_preset=args.feature_map_preset,
         aircraft_preset=args.aircraft_preset,
         causal_mask=args.causal_mask,
+        model_type=args.model_type,
     )
 
     # Print results

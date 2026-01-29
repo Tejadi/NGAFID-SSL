@@ -21,3 +21,4 @@ tfidf_benchmark_results/
 masked_regression_results/
 checkpoint_data_scaling/
 forecasting_results/
+.claude/
