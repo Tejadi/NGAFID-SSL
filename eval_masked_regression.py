@@ -367,7 +367,8 @@ def evaluate_model(model, test_data, flight_ids, normalization_params,
                    masking_ratio=0.6, mean_mask_length=3, batch_size=32,
                    device="cuda", physics_eval=False, feature_map=None,
                    dynamics=None, lambda_control=0.01, physics_mask_ratio=0.3,
-                   max_physics_samples=100, compute_gt_baseline=True):
+                   max_physics_samples=100, compute_gt_baseline=True,
+                   use_amp=True):
     """
     Evaluate model on masked regression task.
 
@@ -398,10 +399,19 @@ def evaluate_model(model, test_data, flight_ids, normalization_params,
     test_data_normalized = (test_data - mean) / std
 
     test_dataset = TensorDataset(
-        torch.FloatTensor(test_data_normalized),
-        torch.LongTensor(flight_ids)
+        torch.from_numpy(test_data_normalized).float(),
+        torch.tensor(flight_ids, dtype=torch.long)
     )
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    # Use pin_memory for faster CPU->GPU transfer
+    pin_memory = device.type == 'cuda'
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=pin_memory,
+        num_workers=4,
+        persistent_workers=True,
+    )
 
     total_mse = 0.0
     total_mae = 0.0
@@ -420,15 +430,16 @@ def evaluate_model(model, test_data, flight_ids, normalization_params,
 
     with torch.no_grad():
         for data, batch_ids in tqdm(test_loader, desc="Evaluating"):
-            data = data.to(device)
+            data = data.to(device, non_blocking=True)
             batch_size_actual = data.shape[0]
 
-            original_data = data.cpu().numpy()
+            # Keep original on CPU for masking (avoid GPU->CPU->GPU roundtrip)
+            original_data_cpu = data.cpu().numpy()
             masked_batch = []
             batch_masks = []
 
             # Apply masking with deterministic seed per flight
-            for sequence, flight_id in zip(original_data, batch_ids):
+            for sequence, flight_id in zip(original_data_cpu, batch_ids):
                 _, masked_sequence, mask = mask_transform(
                     sequence,
                     masking_ratio=masking_ratio,
@@ -440,14 +451,18 @@ def evaluate_model(model, test_data, flight_ids, normalization_params,
                 masked_batch.append(masked_sequence.numpy())
                 batch_masks.append(mask.numpy())
 
-            masked_data = torch.FloatTensor(np.stack(masked_batch)).to(device)
+            masked_data = torch.from_numpy(np.stack(masked_batch)).to(device, dtype=torch.float32, non_blocking=True)
             masks = np.stack(batch_masks)  # (batch, seq_len, feat_dim)
 
-            # Forward pass
-            reconstructed = model(masked_data)
+            # Forward pass with optional AMP
+            if use_amp and device.type == 'cuda':
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                    reconstructed = model(masked_data)
+            else:
+                reconstructed = model(masked_data)
 
-            original_np = data.cpu().numpy()
-            recon_np = reconstructed.cpu().numpy()
+            original_np = original_data_cpu  # Reuse CPU copy
+            recon_np = reconstructed.float().cpu().numpy()
 
             # Overall metrics (all positions)
             total_mse += np.sum((original_np - recon_np) ** 2)
@@ -481,9 +496,13 @@ def evaluate_model(model, test_data, flight_ids, normalization_params,
                     )
 
                     # Run model with contiguous mask
-                    masked_input = torch.FloatTensor(masked_seq_norm).unsqueeze(0).to(device)
-                    phys_recon = model(masked_input)
-                    phys_recon_np = phys_recon.squeeze(0).cpu().numpy()
+                    masked_input = torch.from_numpy(masked_seq_norm).unsqueeze(0).to(device, dtype=torch.float32, non_blocking=True)
+                    if use_amp and device.type == 'cuda':
+                        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                            phys_recon = model(masked_input)
+                    else:
+                        phys_recon = model(masked_input)
+                    phys_recon_np = phys_recon.float().squeeze(0).cpu().numpy()
 
                     # Denormalize reconstruction
                     phys_recon_original = phys_recon_np * std + mean
@@ -592,8 +611,12 @@ def main():
                         help='Mean mask length (default: 3)')
 
     # Evaluation parameters
-    parser.add_argument('--batch_size', type=int, default=16,
-                        help='Batch size for evaluation (default: 16)')
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='Batch size for evaluation (default: 32)')
+    parser.add_argument('--no_amp', action='store_true',
+                        help='Disable automatic mixed precision (AMP)')
+    parser.add_argument('--no_compile', action='store_true',
+                        help='Disable torch.compile() optimization')
 
     # Physics evaluation parameters
     parser.add_argument('--physics_eval', action='store_true',
@@ -682,6 +705,33 @@ def main():
     num_params = sum(p.numel() for p in model.parameters())
     print(f"  Model parameters: {num_params:,}")
 
+    # Enable cudnn benchmark for consistent input sizes
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
+    # Compile model for faster inference (PyTorch 2.0+)
+    if not args.no_compile and hasattr(torch, 'compile'):
+        print("  Compiling model with torch.compile()...")
+        model = torch.compile(model, mode='reduce-overhead')
+
+    use_amp = not args.no_amp and torch.cuda.is_available()
+    if use_amp:
+        print("  Using automatic mixed precision (bfloat16)")
+
+    # Warmup pass to initialize CUDA kernels
+    if torch.cuda.is_available():
+        print("  Running warmup pass...")
+        seq_len = test_data.shape[1]
+        dummy_input = torch.randn(2, seq_len, feat_dim, device=device)
+        with torch.no_grad():
+            if use_amp:
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                    _ = model(dummy_input)
+            else:
+                _ = model(dummy_input)
+        torch.cuda.synchronize()
+        del dummy_input
+
     # Setup physics evaluation if enabled
     feature_map = None
     dynamics = None
@@ -719,6 +769,7 @@ def main():
         physics_mask_ratio=args.physics_mask_ratio,
         max_physics_samples=args.max_physics_samples,
         compute_gt_baseline=not args.skip_gt_physics,
+        use_amp=use_amp,
     )
 
     # Print results
