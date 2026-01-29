@@ -77,6 +77,23 @@ def extract_flight_id(file_path: Path) -> Optional[int]:
     return None
 
 
+def extract_aircraft_type(file_path: Path) -> Optional[str]:
+    """Extract aircraft type from filename like Cessna_172S_flight_100.csv."""
+    name = file_path.stem
+    # Match known aircraft types
+    if name.startswith("Cessna_172S"):
+        return "Cessna_172S"
+    elif name.startswith("PA-28-181"):
+        return "PA-28-181"
+    elif name.startswith("PA-44-180"):
+        return "PA-44-180"
+    return None
+
+
+AIRCRAFT_TYPES = ["Cessna_172S", "PA-28-181", "PA-44-180"]
+AIRCRAFT_TYPE_TO_IDX = {at: i for i, at in enumerate(AIRCRAFT_TYPES)}
+
+
 def load_event_flight_ids(events_file: str) -> Set[int]:
     """Load set of flight IDs that have any anomaly event."""
     df = pd.read_csv(events_file)
@@ -211,7 +228,11 @@ def load_bert_model(checkpoint_path: str, device: torch.device):
         use_gradient_checkpointing=False,
         use_mixed_precision=False,
     )
-    model.load_state_dict(ckpt['model_state_dict'])
+    # Handle torch.compile() prefix in state dict keys
+    state_dict = ckpt['model_state_dict']
+    if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+    model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
     return model
@@ -322,13 +343,14 @@ def extract_all_representations(
     event_flight_ids: Set[int], event_type_flight_ids: Dict[str, Set[int]],
     event_types: List[str], normalization_params: Dict,
     device: torch.device, max_files: Optional[int] = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[int]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[int]]:
     """Extract representations and labels for all flights in a split.
 
     Returns:
         X: representations (N, repr_dim)
-        y_binary: binary labels (N,)
+        y_binary: binary anomaly labels (N,)
         y_multilabel: multi-label matrix (N, num_event_types)
+        y_aircraft: aircraft type labels (N,) - indices into AIRCRAFT_TYPES
         flight_ids: list of flight IDs
     """
     files = get_split_files(data_dir, split)
@@ -338,12 +360,14 @@ def extract_all_representations(
     representations = []
     binary_labels = []
     multilabel_rows = []
+    aircraft_labels = []
     flight_ids = []
     skipped = 0
 
     for file_path in tqdm(files, desc=f"Extracting {split} representations"):
         fid = extract_flight_id(file_path)
-        if fid is None:
+        aircraft_type = extract_aircraft_type(file_path)
+        if fid is None or aircraft_type is None:
             skipped += 1
             continue
 
@@ -352,10 +376,12 @@ def extract_all_representations(
             rep = extract_representation(model, model_type, flight_data, device)
             binary_label = 1 if fid in event_flight_ids else 0
             multi_label = [1 if fid in event_type_flight_ids[et] else 0 for et in event_types]
+            aircraft_idx = AIRCRAFT_TYPE_TO_IDX[aircraft_type]
 
             representations.append(rep)
             binary_labels.append(binary_label)
             multilabel_rows.append(multi_label)
+            aircraft_labels.append(aircraft_idx)
             flight_ids.append(fid)
         except Exception as e:
             print(f"Error processing {file_path.name}: {e}")
@@ -372,7 +398,8 @@ def extract_all_representations(
     X = np.stack(representations)
     y_binary = np.array(binary_labels)
     y_multilabel = np.array(multilabel_rows)
-    return X, y_binary, y_multilabel, flight_ids
+    y_aircraft = np.array(aircraft_labels)
+    return X, y_binary, y_multilabel, y_aircraft, flight_ids
 
 
 def train_and_evaluate_probe(
@@ -468,6 +495,80 @@ def evaluate_per_event_type(
     }
 
 
+def train_and_evaluate_aircraft_probe(
+    X_train: np.ndarray, y_train: np.ndarray,
+    X_test: np.ndarray, y_test: np.ndarray,
+    seed: int = 42,
+) -> Dict:
+    """Train multi-class logistic regression for aircraft classification."""
+    from sklearn.metrics import confusion_matrix
+
+    # Scale features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Train multi-class classifier
+    clf = LogisticRegression(
+        max_iter=1000,
+        solver='lbfgs',
+        random_state=seed,
+        multi_class='multinomial',
+        class_weight='balanced',
+        C=1.0,
+    )
+    clf.fit(X_train_scaled, y_train)
+
+    # Predict
+    y_pred = clf.predict(X_test_scaled)
+    y_prob = clf.predict_proba(X_test_scaled)
+
+    # Compute metrics
+    accuracy = accuracy_score(y_test, y_pred)
+
+    # Per-class metrics
+    per_class_metrics = {}
+    for i, aircraft in enumerate(AIRCRAFT_TYPES):
+        y_true_binary = (y_test == i).astype(int)
+        y_pred_binary = (y_pred == i).astype(int)
+        y_prob_class = y_prob[:, i]
+
+        per_class_metrics[aircraft] = {
+            "precision": float(precision_score(y_true_binary, y_pred_binary, zero_division=0)),
+            "recall": float(recall_score(y_true_binary, y_pred_binary, zero_division=0)),
+            "f1": float(f1_score(y_true_binary, y_pred_binary, zero_division=0)),
+            "roc_auc": float(roc_auc_score(y_true_binary, y_prob_class)) if y_true_binary.sum() > 0 else 0.0,
+            "support": int(y_true_binary.sum()),
+        }
+
+    # Macro-averaged metrics
+    macro_f1 = float(f1_score(y_test, y_pred, average='macro', zero_division=0))
+    macro_precision = float(precision_score(y_test, y_pred, average='macro', zero_division=0))
+    macro_recall = float(recall_score(y_test, y_pred, average='macro', zero_division=0))
+
+    # One-vs-rest ROC-AUC
+    try:
+        macro_roc_auc = float(roc_auc_score(y_test, y_prob, multi_class='ovr', average='macro'))
+    except ValueError:
+        macro_roc_auc = 0.0
+
+    # Confusion matrix
+    cm = confusion_matrix(y_test, y_pred)
+
+    metrics = {
+        "accuracy": float(accuracy),
+        "macro_precision": macro_precision,
+        "macro_recall": macro_recall,
+        "macro_f1": macro_f1,
+        "macro_roc_auc": macro_roc_auc,
+        "per_class": per_class_metrics,
+        "confusion_matrix": cm.tolist(),
+        "class_names": AIRCRAFT_TYPES,
+    }
+
+    return metrics
+
+
 def main():
     args = parse_args()
     np.random.seed(args.seed)
@@ -499,22 +600,26 @@ def main():
 
     # Extract representations
     print("\nExtracting train representations...")
-    X_train, y_train, y_train_multi, train_ids = extract_all_representations(
+    X_train, y_train, y_train_multi, y_train_aircraft, train_ids = extract_all_representations(
         model, args.model_type, args.data_dir, "train",
         event_flight_ids, event_type_flight_ids, event_types,
         norm_params, device, args.max_files,
     )
     print(f"Train: {len(y_train)} flights, {y_train.sum()} with events "
           f"({y_train.mean():.1%}), repr dim: {X_train.shape[1]}")
+    for i, at in enumerate(AIRCRAFT_TYPES):
+        print(f"  {at}: {(y_train_aircraft == i).sum()} flights")
 
     print("\nExtracting test representations...")
-    X_test, y_test, y_test_multi, test_ids = extract_all_representations(
+    X_test, y_test, y_test_multi, y_test_aircraft, test_ids = extract_all_representations(
         model, args.model_type, args.data_dir, "test",
         event_flight_ids, event_type_flight_ids, event_types,
         norm_params, device, args.max_files,
     )
     print(f"Test: {len(y_test)} flights, {y_test.sum()} with events "
           f"({y_test.mean():.1%}), repr dim: {X_test.shape[1]}")
+    for i, at in enumerate(AIRCRAFT_TYPES):
+        print(f"  {at}: {(y_test_aircraft == i).sum()} flights")
 
     # Binary classification
     print("\nTraining binary linear probe...")
@@ -548,6 +653,29 @@ def main():
         else:
             print(f"  {et:<35} {r['roc_auc']:>8.4f} {r['f1']:>8.4f} {r['train_positives']:>7} {r['test_positives']:>7}")
 
+    # Aircraft classification
+    print("\n" + "=" * 60)
+    print("Aircraft Classification")
+    print("=" * 60)
+    print("\nTraining aircraft classification probe...")
+    aircraft_metrics = train_and_evaluate_aircraft_probe(
+        X_train, y_train_aircraft, X_test, y_test_aircraft, args.seed
+    )
+
+    print(f"\nAircraft Classification Results:")
+    print(f"  Accuracy:       {aircraft_metrics['accuracy']:.4f}")
+    print(f"  Macro ROC-AUC:  {aircraft_metrics['macro_roc_auc']:.4f}")
+    print(f"  Macro F1:       {aircraft_metrics['macro_f1']:.4f}")
+    print(f"  Macro Precision:{aircraft_metrics['macro_precision']:.4f}")
+    print(f"  Macro Recall:   {aircraft_metrics['macro_recall']:.4f}")
+    print(f"\n  Per-Class Results:")
+    print(f"  {'Aircraft':<15} {'ROC-AUC':>8} {'F1':>8} {'Prec':>8} {'Recall':>8} {'Support':>8}")
+    print(f"  {'-'*15} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+    for aircraft in AIRCRAFT_TYPES:
+        m = aircraft_metrics['per_class'][aircraft]
+        print(f"  {aircraft:<15} {m['roc_auc']:>8.4f} {m['f1']:>8.4f} {m['precision']:>8.4f} {m['recall']:>8.4f} {m['support']:>8}")
+    print("=" * 60)
+
     # Save results
     os.makedirs(args.output_dir, exist_ok=True)
     results = {
@@ -556,11 +684,18 @@ def main():
         "representation_dim": int(X_train.shape[1]),
         "train_flights": int(len(y_train)),
         "test_flights": int(len(y_test)),
-        "train_positive_rate": float(y_train.mean()),
-        "test_positive_rate": float(y_test.mean()),
-        "binary_metrics": binary_metrics,
-        "multilabel_results": multilabel_results,
-        "event_types": event_types,
+        "anomaly_classification": {
+            "train_positive_rate": float(y_train.mean()),
+            "test_positive_rate": float(y_test.mean()),
+            "binary_metrics": binary_metrics,
+            "multilabel_results": multilabel_results,
+            "event_types": event_types,
+        },
+        "aircraft_classification": {
+            "metrics": aircraft_metrics,
+            "train_distribution": {at: int((y_train_aircraft == i).sum()) for i, at in enumerate(AIRCRAFT_TYPES)},
+            "test_distribution": {at: int((y_test_aircraft == i).sum()) for i, at in enumerate(AIRCRAFT_TYPES)},
+        },
         "classifier_config": {
             "type": "LogisticRegression",
             "solver": "lbfgs",
@@ -571,7 +706,7 @@ def main():
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
 
-    output_file = os.path.join(args.output_dir, f"{args.model_type}_anomaly_probe.json")
+    output_file = os.path.join(args.output_dir, f"{args.model_type}_linear_probe.json")
     with open(output_file, "w") as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to: {output_file}")

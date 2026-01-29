@@ -105,8 +105,10 @@ def parse_args():
                         help="Warmup steps")
     parser.add_argument("--eval_interval", type=int, default=50,
                         help="Evaluation interval (steps)")
-    parser.add_argument("--save_interval", type=int, default=200,
+    parser.add_argument("--save_interval", type=int, default=2000,
                         help="Checkpoint save interval (steps)")
+    parser.add_argument("--max_checkpoints", type=int, default=3,
+                        help="Maximum number of step checkpoints to keep (best_model.pt always kept)")
     parser.add_argument("--log_interval", type=int, default=1,
                         help="Logging interval (steps)")
 
@@ -121,6 +123,8 @@ def parse_args():
                         help="Output directory")
     parser.add_argument("--job_name", type=str, default=None,
                         help="Job name for this run")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint to resume training from")
 
     # W&B arguments
     parser.add_argument("--wandb_project", type=str, default="bert-flight-forecaster",
@@ -391,17 +395,32 @@ def main():
     print("Starting training...")
     global_step = 0
     best_eval_loss = float('inf')
+    start_epoch = 0
+
+    # Resume from checkpoint if specified
+    if args.resume:
+        if os.path.exists(args.resume):
+            print(f"Resuming from checkpoint: {args.resume}")
+            checkpoint = torch.load(args.resume, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            start_epoch = checkpoint['epoch'] + 1
+            global_step = checkpoint['global_step']
+            print(f"  Resumed at epoch {start_epoch}, global_step {global_step}")
+        else:
+            print(f"Warning: checkpoint not found at {args.resume}, starting fresh")
 
     # Checkpoints directory
     checkpoint_dir = os.path.join(
-        "/oscar/home/cduong5/NGAFID-SSL/checkpoints",
+        "./checkpoints",
         f"bert_forecaster_{timestamp}"
     )
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     save_epochs = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
 
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         epoch_loss = 0.0
         epoch_mse_loss = 0.0
@@ -562,6 +581,21 @@ def main():
                     'global_step': global_step,
                     'feat_dim': feat_dim,
                 }, os.path.join(output_dir, f"checkpoint_step_{global_step}.pt"))
+
+                # Clean up old checkpoints, keeping only the most recent max_checkpoints
+                import glob as glob_module
+                import re
+                checkpoint_files = glob_module.glob(os.path.join(output_dir, "checkpoint_step_*.pt"))
+                if len(checkpoint_files) > args.max_checkpoints:
+                    # Sort by step number
+                    def get_step(f):
+                        match = re.search(r'checkpoint_step_(\d+)\.pt', f)
+                        return int(match.group(1)) if match else 0
+                    checkpoint_files.sort(key=get_step)
+                    # Remove oldest checkpoints
+                    for old_ckpt in checkpoint_files[:-args.max_checkpoints]:
+                        os.remove(old_ckpt)
+                        print(f"Removed old checkpoint: {os.path.basename(old_ckpt)}")
 
         # End of epoch
         if torch.cuda.is_available():

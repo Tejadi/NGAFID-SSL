@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
 """
-Anomaly Detection Evaluation Script
+Unified evaluation script for anomaly detection benchmark.
+Supports BERT, LSTM, and MLP models with identical evaluation protocol.
 
-Evaluates a pretrained BERT Masked Regressor on anomaly detection using
-reconstruction error. Higher reconstruction error indicates anomalous behavior.
+This is a zero-shot transfer task - models pretrained on masked regression
+are evaluated on anomaly detection using reconstruction error.
+Higher reconstruction error indicates anomalous behavior.
 
-This is a zero-shot approach - no additional training required.
+Usage:
+    python eval_anomaly_detection.py --model_type bert --checkpoint path/to/model.pt --data_dir path/to/test_data
+    python eval_anomaly_detection.py --model_type lstm --checkpoint path/to/model.pt --data_dir path/to/test_data
+    python eval_anomaly_detection.py --model_type mlp --checkpoint path/to/model.pt --data_dir path/to/test_data
 """
-
-import argparse
-import os
-import json
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
 
 import torch
 import numpy as np
 import pandas as pd
+import json
+import os
+import re
+import argparse
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 from tqdm import tqdm
 from sklearn.metrics import (
     roc_auc_score,
@@ -27,102 +33,225 @@ from sklearn.metrics import (
     recall_score
 )
 
-try:
-    from models.bert_masked_regressor import BertMaskedRegressor
-    from train_full_flights import compute_normalization_parameters
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Make sure you're running from the project root directory")
-    exit(1)
+from models.bert_masked_regressor import BertMaskedRegressor
+from models.lstm_baseline import LSTMBaseline
+from models.mlp_baseline import MLPBaseline
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluate anomaly detection using BERT reconstruction error"
-    )
-
-    # Model arguments
-    parser.add_argument("--checkpoint", type=str, required=True,
-                        help="Path to model checkpoint")
-
-    # Data arguments
-    parser.add_argument("--data_dir", type=str, default="/oscar/data/sbach/shared/ngafid",
-                        help="Directory containing flight data")
-    parser.add_argument("--events_file", type=str, default=None,
-                        help="Path to events.csv (default: data_dir/events.csv)")
-    parser.add_argument("--split", type=str, default="test",
-                        choices=["train", "val", "test"],
-                        help="Data split to evaluate on")
-    parser.add_argument("--max_files", type=int, default=None,
-                        help="Maximum number of files to evaluate")
-
-    # Evaluation arguments
-    parser.add_argument("--mask_ratio", type=float, default=0.15,
-                        help="Masking ratio for reconstruction (lower = more context)")
-    parser.add_argument("--num_mask_samples", type=int, default=5,
-                        help="Number of masking samples per flight for robust estimation")
-    parser.add_argument("--threshold_percentile", type=float, default=95,
-                        help="Percentile threshold for anomaly detection")
-
-    # Output arguments
-    parser.add_argument("--output_dir", type=str, default="./anomaly_detection_results",
-                        help="Output directory for results")
-
-    # System arguments
-    parser.add_argument("--device", type=str, default="auto",
-                        help="Device to use")
-    parser.add_argument("--batch_size", type=int, default=1,
-                        help="Batch size (1 recommended for full flights)")
-
-    return parser.parse_args()
+def convert_to_serializable(obj):
+    """Convert numpy types to Python native types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(v) for v in obj]
+    elif isinstance(obj, (np.floating, np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.integer, np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
 
 
-def load_model(checkpoint_path: str, device: torch.device) -> Tuple[BertMaskedRegressor, dict]:
-    """Load pretrained model from checkpoint."""
-    print(f"Loading checkpoint: {checkpoint_path}")
+def compute_normalization_parameters(data_dir: str, max_files: int = 100, aircraft_types: list = None):
+    """
+    Compute global normalization parameters from training data.
 
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    Args:
+        data_dir: Directory containing CSV flight data files (train split)
+        max_files: Maximum number of files to use for computing statistics
+        aircraft_types: List of aircraft type prefixes to filter by
+
+    Returns:
+        Dictionary containing 'mean' and 'std' arrays
+    """
+    print("Computing normalization parameters from training data...")
+
+    data_path = Path(data_dir)
+    train_files = list(data_path.glob("*.csv"))
+    train_files = [f for f in train_files if not any(name in f.name.lower()
+                  for name in ['aircraft_types', 'events', 'flight_ids', 'splits', 'sequence_length'])]
+
+    # Filter by aircraft type if specified
+    if aircraft_types is not None:
+        before = len(train_files)
+        train_files = [f for f in train_files if any(f.name.startswith(at) for at in aircraft_types)]
+        print(f"  Aircraft filter {aircraft_types}: {before} -> {len(train_files)} files")
+
+    train_files = train_files[:max_files]
+
+    if not train_files:
+        raise ValueError(f"No training CSV files found in {data_dir}")
+
+    print(f"  Using {len(train_files)} files to compute normalization parameters")
+
+    all_data = []
+    for csv_file in tqdm(train_files, desc="Loading training data"):
+        try:
+            df = pd.read_csv(csv_file, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            df_numeric = df[numeric_cols]
+            df_clean = df_numeric.ffill().bfill()
+            flight_data = df_clean.to_numpy(dtype=np.float32)
+
+            if flight_data.shape[0] > 0 and flight_data.shape[1] > 0:
+                all_data.append(flight_data)
+        except Exception as e:
+            print(f"  Warning: Error processing {csv_file.name}: {e}")
+            continue
+
+    if not all_data:
+        raise ValueError("No valid data found for computing normalization parameters")
+
+    concatenated_data = np.vstack(all_data)
+    print(f"  Total data shape: {concatenated_data.shape}")
+
+    data_mean = np.mean(concatenated_data, axis=0)
+    data_std = np.std(concatenated_data, axis=0)
+    data_std[data_std == 0] = 1.0
+
+    print(f"  Computed normalization parameters for {len(data_mean)} features")
+
+    return {
+        'mean': data_mean,
+        'std': data_std
+    }
+
+
+def load_bert_model(checkpoint_path, feat_dim, device):
+    """Load BERT model from checkpoint."""
+    checkpoint = torch.load(checkpoint_path, map_location=device, mmap=True)
 
     # Extract config
     if 'config' in checkpoint:
         config = checkpoint['config']
-    elif 'args' in checkpoint:
-        config = checkpoint['args']
     else:
-        # Try to infer from checkpoint keys
-        config = {
-            'hidden_size': 1024,
-            'encoder_layers': 8,
-            'decoder_layers': 6,
-            'num_heads': 16,
-            'seq_len': 10000,
-            'dropout': 0.1,
-        }
-        print("Warning: No config found in checkpoint, using defaults")
+        config = {}
 
-    # Get feat_dim
-    feat_dim = checkpoint.get('feat_dim', 44)
+    # Get model parameters with defaults
+    hidden_size = config.get('hidden_size', 1024)
+    encoder_layers = config.get('encoder_layers', 8)
+    decoder_layers = config.get('decoder_layers', 6)
+    num_heads = config.get('num_heads', 16)
+    max_seq_len = config.get('seq_len', config.get('max_seq_len', 10000))
+    dropout = config.get('dropout', 0.1)
 
     # Create model
     model = BertMaskedRegressor(
         feat_dim=feat_dim,
-        hidden_size=config.get('hidden_size', 1024),
-        encoder_layers=config.get('encoder_layers', 8),
-        decoder_layers=config.get('decoder_layers', 6),
-        num_heads=config.get('num_heads', 16),
-        dropout=config.get('dropout', 0.1),
-        max_seq_len=config.get('seq_len', 10000),
-    ).to(device)
+        hidden_size=hidden_size,
+        encoder_layers=encoder_layers,
+        decoder_layers=decoder_layers,
+        num_heads=num_heads,
+        dropout=dropout,
+        max_seq_len=max_seq_len,
+        use_gradient_checkpointing=False,
+        use_mixed_precision=False,
+    )
+
+    # Handle torch.compile() prefix in state dict keys
+    state_dict = checkpoint['model_state_dict']
+    if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+        state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
+    # Load weights
+    model.load_state_dict(state_dict)
+    model = model.to(device)
+    model.eval()
+
+    model_config = {
+        'hidden_size': hidden_size,
+        'encoder_layers': encoder_layers,
+        'decoder_layers': decoder_layers,
+        'num_heads': num_heads,
+        'max_seq_len': max_seq_len,
+    }
+
+    return model, model_config
+
+
+def load_lstm_model(checkpoint_path, feat_dim, device):
+    """Load LSTM model from checkpoint."""
+    checkpoint = torch.load(checkpoint_path, map_location=device, mmap=True)
+
+    # Extract config
+    if 'config' in checkpoint:
+        config = checkpoint['config']
+    else:
+        config = {}
+
+    # Get model parameters with defaults
+    hidden_size = config.get('hidden_size', 256)
+    num_layers = config.get('num_layers', 2)
+    dropout = config.get('dropout', 0.1)
+    bidirectional = config.get('bidirectional', True)
+
+    # Create model
+    model = LSTMBaseline(
+        feat_dim=feat_dim,
+        hidden_size=hidden_size,
+        num_layers=num_layers,
+        dropout=dropout,
+        bidirectional=bidirectional,
+    )
 
     # Load weights
     model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
     model.eval()
 
-    print(f"Model loaded: {config.get('hidden_size', 1024)}d, "
-          f"{config.get('encoder_layers', 8)} enc, {config.get('decoder_layers', 6)} dec")
-    print(f"Feature dim: {feat_dim}")
+    model_config = {
+        'hidden_size': hidden_size,
+        'num_layers': num_layers,
+        'dropout': dropout,
+        'bidirectional': bidirectional,
+    }
 
-    return model, config
+    return model, model_config
+
+
+def load_mlp_model(checkpoint_path, feat_dim, device):
+    """Load MLP model from checkpoint."""
+    checkpoint = torch.load(checkpoint_path, map_location=device, mmap=True)
+
+    # Extract config
+    if 'config' in checkpoint:
+        config = checkpoint['config']
+    else:
+        config = {}
+
+    # Get model parameters with defaults
+    hidden_sizes = config.get('hidden_sizes', [256, 512, 256])
+    dropout = config.get('dropout', 0.1)
+
+    # Create model
+    model = MLPBaseline(
+        feat_dim=feat_dim,
+        hidden_sizes=hidden_sizes,
+        dropout=dropout,
+    )
+
+    # Load weights
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    model.eval()
+
+    model_config = {
+        'hidden_sizes': hidden_sizes,
+        'dropout': dropout,
+    }
+
+    return model, model_config
+
+
+def load_model(model_type, checkpoint_path, feat_dim, device):
+    """Load model based on type."""
+    loaders = {
+        'bert': load_bert_model,
+        'lstm': load_lstm_model,
+        'mlp': load_mlp_model,
+    }
+    return loaders[model_type](checkpoint_path, feat_dim, device)
 
 
 def load_events(events_file: str) -> pd.DataFrame:
@@ -140,37 +269,31 @@ def load_events(events_file: str) -> pd.DataFrame:
     events_df['end_line'] = events_df['end_line'].astype(int)
     events_df['severity'] = pd.to_numeric(events_df['severity'].astype(str).str.strip(), errors='coerce')
 
-    print(f"Loaded {len(events_df)} events")
-    print(f"Event types: {events_df['name'].nunique()}")
-    print(f"Flights with events: {events_df['flight_id'].nunique()}")
+    print(f"  Loaded {len(events_df)} events")
+    print(f"  Event types: {events_df['name'].nunique()}")
+    print(f"  Flights with events: {events_df['flight_id'].nunique()}")
 
     return events_df
 
 
-def get_flight_files(data_dir: str, split: str, max_files: Optional[int] = None) -> List[Path]:
-    """Get list of flight files for a given split."""
-    split_dir = Path(data_dir) / "preprocessed_data" / split
+def get_flight_files(data_dir: str, max_files: Optional[int] = None) -> List[Path]:
+    """Get list of flight files from a directory."""
+    data_path = Path(data_dir)
 
-    if not split_dir.exists():
-        # Try alternative naming
-        if split == "val":
-            split_dir = Path(data_dir) / "preprocessed_data" / "validation"
-
-    if not split_dir.exists():
-        raise ValueError(f"Split directory not found: {split_dir}")
-
-    flight_files = sorted(split_dir.glob("*.csv"))
+    flight_files = sorted(data_path.glob("*.csv"))
+    # Filter out metadata files
+    flight_files = [f for f in flight_files if not any(name in f.name.lower()
+                   for name in ['aircraft_types', 'events', 'flight_ids', 'splits', 'sequence_length'])]
 
     if max_files:
         flight_files = flight_files[:max_files]
 
-    print(f"Found {len(flight_files)} flight files in {split} split")
+    print(f"  Found {len(flight_files)} flight files")
     return flight_files
 
 
 def extract_flight_id(file_path: Path) -> Optional[int]:
     """Extract flight ID from filename."""
-    # Expected format: AircraftType_flight_ID.csv
     name = file_path.stem
     parts = name.split('_')
 
@@ -182,7 +305,6 @@ def extract_flight_id(file_path: Path) -> Optional[int]:
                 pass
 
     # Try to find any number in the filename
-    import re
     numbers = re.findall(r'\d+', name)
     if numbers:
         return int(numbers[-1])
@@ -194,7 +316,7 @@ def load_and_normalize_flight(
     file_path: Path,
     normalization_params: Dict[str, np.ndarray],
     seq_len: int = 10000
-) -> np.ndarray:
+) -> Tuple[np.ndarray, int]:
     """Load and normalize a flight file."""
     df = pd.read_csv(file_path, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
 
@@ -231,7 +353,7 @@ def load_and_normalize_flight(
 
 
 def compute_reconstruction_error(
-    model: BertMaskedRegressor,
+    model,
     flight_data: np.ndarray,
     original_length: int,
     device: torch.device,
@@ -341,41 +463,110 @@ def evaluate_anomaly_detection(
 
 
 def main():
-    args = parse_args()
+    parser = argparse.ArgumentParser(
+        description='Evaluate models on anomaly detection benchmark (zero-shot transfer)',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    # Required arguments
+    parser.add_argument('--model_type', type=str, required=True,
+                        choices=['bert', 'lstm', 'mlp'],
+                        help='Type of model to evaluate')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='Path to model checkpoint')
+    parser.add_argument('--data_dir', type=str, required=True,
+                        help='Directory containing test flight CSV files')
+    parser.add_argument('--events_file', type=str, required=True,
+                        help='Path to events.csv with anomaly labels')
+
+    # Normalization parameters
+    parser.add_argument('--norm_params', type=str, default=None,
+                        help='Path to normalization parameters (.npy file)')
+    parser.add_argument('--train_data_dir', type=str, default=None,
+                        help='Directory containing training data for computing normalization')
+
+    # Aircraft filtering for normalization
+    parser.add_argument('--aircraft_type', type=str, nargs='+', default=None,
+                        choices=["Cessna_172S", "PA-28-181", "PA-44-180"],
+                        help='Filter normalization data to specific aircraft type(s)')
+    parser.add_argument('--aircraft_class', type=str, default=None,
+                        choices=["single_engine", "multi_engine"],
+                        help='Filter normalization data by aircraft class')
+
+    # Anomaly detection parameters
+    parser.add_argument('--mask_ratio', type=float, default=0.15,
+                        help='Masking ratio for reconstruction (lower = more context)')
+    parser.add_argument('--num_mask_samples', type=int, default=5,
+                        help='Number of masking samples per flight for robust estimation')
+    parser.add_argument('--threshold_percentile', type=float, default=95,
+                        help='Percentile threshold for anomaly detection')
+    parser.add_argument('--max_files', type=int, default=None,
+                        help='Maximum number of files to evaluate')
+
+    # Evaluation parameters
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size for evaluation (1 recommended for full flights)')
+
+    # Output parameters
+    parser.add_argument('--output_dir', type=str, default='./anomaly_detection_results',
+                        help='Directory to save results')
+    parser.add_argument('--run_name', type=str, default=None,
+                        help='Optional name for this evaluation run')
+
+    args = parser.parse_args()
+
+    # Resolve aircraft_class to aircraft_type list
+    AIRCRAFT_CLASS_MAP = {
+        "single_engine": ["Cessna_172S", "PA-28-181"],
+        "multi_engine": ["PA-44-180"],
+    }
+    if args.aircraft_class is not None:
+        if args.aircraft_type is not None:
+            print("Warning: --aircraft_class overrides --aircraft_type")
+        args.aircraft_type = AIRCRAFT_CLASS_MAP[args.aircraft_class]
 
     # Setup device
-    if args.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(args.device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
+    # Load or compute normalization parameters
+    if args.norm_params is not None:
+        print(f"Loading normalization parameters from {args.norm_params}...")
+        normalization_params = np.load(args.norm_params, allow_pickle=True).item()
+    else:
+        # Compute from training data
+        if args.train_data_dir is not None:
+            train_dir = args.train_data_dir
+        else:
+            # Default to sibling "train" folder
+            data_path = Path(args.data_dir)
+            train_dir = data_path.parent / "train"
+            if not train_dir.exists():
+                raise ValueError(f"Could not find training data at {train_dir}. "
+                               "Please provide --norm_params or --train_data_dir")
+        print(f"Computing normalization parameters from {train_dir}...")
+        normalization_params = compute_normalization_parameters(str(train_dir), aircraft_types=args.aircraft_type)
+
+    feat_dim = len(normalization_params['mean'])
+
     # Load model
-    model, config = load_model(args.checkpoint, device)
-    seq_len = config.get('seq_len', 10000)
+    print(f"Loading {args.model_type.upper()} model from {args.checkpoint}...")
+    model, model_config = load_model(args.model_type, args.checkpoint, feat_dim, device)
+
+    # Count parameters
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"  Model parameters: {num_params:,}")
 
     # Load events
-    events_file = args.events_file or os.path.join(args.data_dir, "events.csv")
-    events_df = load_events(events_file)
-
-    # Create flight_id to events mapping
+    events_df = load_events(args.events_file)
     events_by_flight = events_df.groupby('flight_id')
 
-    # Compute normalization parameters
-    print("Computing normalization parameters...")
-    try:
-        normalization_params = compute_normalization_parameters(
-            args.data_dir, max_files=100
-        )
-    except Exception as e:
-        print(f"Warning: Could not compute normalization: {e}")
-        normalization_params = None
-
     # Get flight files
-    flight_files = get_flight_files(args.data_dir, args.split, args.max_files)
+    print(f"Loading test data from {args.data_dir}...")
+    flight_files = get_flight_files(args.data_dir, args.max_files)
 
     # Process flights
     all_reconstruction_errors = []
@@ -383,9 +574,11 @@ def main():
     flights_with_events = 0
     flights_processed = 0
 
-    print(f"\nProcessing {len(flight_files)} flights...")
+    seq_len = model_config.get('max_seq_len', 10000)
 
-    for file_path in tqdm(flight_files, desc="Evaluating flights"):
+    print(f"\nEvaluating with mask_ratio={args.mask_ratio}, num_samples={args.num_mask_samples}...")
+
+    for file_path in tqdm(flight_files, desc="Evaluating"):
         flight_id = extract_flight_id(file_path)
 
         if flight_id is None:
@@ -420,12 +613,12 @@ def main():
         all_ground_truth.append(labels)
         flights_processed += 1
 
-    print(f"\nProcessed {flights_processed} flights")
-    print(f"Flights with labeled events: {flights_with_events}")
+    print(f"\n  Processed {flights_processed} flights")
+    print(f"  Flights with labeled events: {flights_with_events}")
 
     # Evaluate
     print("\nComputing metrics...")
-    results = evaluate_anomaly_detection(
+    metrics = evaluate_anomaly_detection(
         all_reconstruction_errors,
         all_ground_truth,
         threshold_percentile=args.threshold_percentile
@@ -435,28 +628,60 @@ def main():
     print("\n" + "=" * 60)
     print("ANOMALY DETECTION RESULTS")
     print("=" * 60)
-    print(f"ROC-AUC:           {results['roc_auc']:.4f}")
-    print(f"Average Precision: {results['avg_precision']:.4f}")
-    print(f"Precision:         {results['precision']:.4f}")
-    print(f"Recall:            {results['recall']:.4f}")
-    print(f"F1 Score:          {results['f1']:.4f}")
+    print(f"Model: {args.model_type.upper()}")
+    print(f"Checkpoint: {args.checkpoint}")
+    print(f"Mask ratio: {args.mask_ratio}")
+    print(f"Num mask samples: {args.num_mask_samples}")
     print("-" * 60)
-    print(f"Total timesteps:   {results['total_timesteps']:,}")
-    print(f"Anomaly timesteps: {results['anomaly_timesteps']:,} ({results['anomaly_ratio']*100:.2f}%)")
-    print(f"Threshold ({args.threshold_percentile}%ile): {results['threshold']:.4f}")
+    print(f"ROC-AUC:           {metrics['roc_auc']:.6f}")
+    print(f"Average Precision: {metrics['avg_precision']:.6f}")
+    print("-" * 60)
+    print(f"Precision:         {metrics['precision']:.6f}")
+    print(f"Recall:            {metrics['recall']:.6f}")
+    print(f"F1 Score:          {metrics['f1']:.6f}")
+    print("-" * 60)
+    print(f"Total timesteps:   {metrics['total_timesteps']:,}")
+    print(f"Anomaly timesteps: {metrics['anomaly_timesteps']:,} ({metrics['anomaly_ratio']*100:.2f}%)")
+    print(f"Threshold ({args.threshold_percentile}%ile): {metrics['threshold']:.6f}")
     print("=" * 60)
 
     # Save results
-    results['checkpoint'] = args.checkpoint
-    results['split'] = args.split
-    results['mask_ratio'] = args.mask_ratio
-    results['num_mask_samples'] = args.num_mask_samples
-    results['flights_processed'] = flights_processed
-    results['flights_with_events'] = flights_with_events
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_name = args.run_name or f"{args.model_type}_{timestamp}"
 
-    output_file = os.path.join(args.output_dir, f"anomaly_results_{args.split}.json")
+    # Determine norm params source for logging
+    if args.norm_params is not None:
+        norm_source = args.norm_params
+    elif args.train_data_dir is not None:
+        norm_source = f"computed from {args.train_data_dir}"
+    else:
+        norm_source = f"computed from {Path(args.data_dir).parent / 'train'}"
+
+    results = {
+        'model_type': args.model_type,
+        'checkpoint': args.checkpoint,
+        'data_dir': args.data_dir,
+        'events_file': args.events_file,
+        'norm_params_source': norm_source,
+        'timestamp': timestamp,
+        'run_name': run_name,
+        'config': {
+            'mask_ratio': args.mask_ratio,
+            'num_mask_samples': args.num_mask_samples,
+            'threshold_percentile': args.threshold_percentile,
+            'batch_size': args.batch_size,
+            'feat_dim': feat_dim,
+            'num_test_flights': flights_processed,
+            'flights_with_events': flights_with_events,
+            'num_parameters': num_params,
+        },
+        'model_config': model_config,
+        'metrics': metrics,
+    }
+
+    output_file = os.path.join(args.output_dir, f"{run_name}.json")
     with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(convert_to_serializable(results), f, indent=2)
     print(f"\nResults saved to: {output_file}")
 
     # Also evaluate per event type
@@ -496,9 +721,9 @@ def main():
                   f"Events: {type_results['anomaly_timesteps']:,}")
 
     # Save per-event results
-    output_file_events = os.path.join(args.output_dir, f"anomaly_results_by_event_{args.split}.json")
+    output_file_events = os.path.join(args.output_dir, f"{run_name}_by_event.json")
     with open(output_file_events, 'w') as f:
-        json.dump(per_event_results, f, indent=2)
+        json.dump(convert_to_serializable(per_event_results), f, indent=2)
     print(f"\nPer-event results saved to: {output_file_events}")
 
 

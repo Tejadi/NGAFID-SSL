@@ -497,6 +497,16 @@ def main():
                         help="Filter training data by aircraft class (single_engine=Cessna_172S+PA-28-181, multi_engine=PA-44-180)")
     parser.add_argument("--data_scale", type=float, default=1.0,
                         help="Fraction of training data to use (0.0-1.0) for data scaling experiments")
+    parser.add_argument("--use_flash_attention", action="store_true",
+                        help="Enable Flash Attention 2 for O(n) memory attention (requires flash-attn package)")
+    parser.add_argument("--batch_size", type=int, default=4,
+                        help="Batch size for training (default: 4, increase with Flash Attention)")
+    parser.add_argument("--gradient_accumulation", type=int, default=8,
+                        help="Gradient accumulation steps (default: 8)")
+    parser.add_argument("--compile", action="store_true",
+                        help="Use torch.compile() for 10-30%% speedup (PyTorch 2.0+)")
+    parser.add_argument("--num_workers", type=int, default=4,
+                        help="Number of DataLoader workers (default: 4)")
     args = parser.parse_args()
 
     # Resolve aircraft_class to aircraft_type list
@@ -516,10 +526,15 @@ def main():
     # Dataset and model configuration
     data_dir = args.data_dir
     seq_len = 10000  # Full flight sequences (non-negotiable)
-    batch_size = 4   # Ultra-conservative for seq_len=10000
-    gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
+    batch_size = args.batch_size
+    gradient_accumulation_steps = args.gradient_accumulation
     epochs = 50
     learning_rate = 1e-4  # Slightly higher due to smaller batch size
+    use_flash_attention = args.use_flash_attention
+
+    if use_flash_attention:
+        print("Flash Attention 2 enabled - using O(n) memory for attention")
+        print("  Recommended: --batch_size 16 --gradient_accumulation 2 for A100 80GB")
 
     # Model architecture (memory-optimized)
     hidden_size = 1024  # Reduced from 1536
@@ -554,6 +569,12 @@ def main():
         device = torch.device("cuda")
         print(f"🔥 Using GPU: {torch.cuda.get_device_name()}")
         print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+
+        # A100/H100 optimizations
+        torch.backends.cuda.matmul.allow_tf32 = True  # TF32 for faster matmuls
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+        print(f"   TF32 enabled: matmul speedup on A100/H100")
     else:
         device = torch.device("cpu")
         print("⚠️  Using CPU (GPU not available)")
@@ -629,7 +650,7 @@ def main():
             batch_size=batch_size,
             seq_len=seq_len,
             max_files=max_files_train,
-            num_workers=1,  # Reduced for memory efficiency
+            num_workers=args.num_workers,
             seed=42,
             use_random_masking=use_random_masking,
             masking_ratio=masking_ratio,
@@ -658,7 +679,7 @@ def main():
             batch_size=batch_size,
             seq_len=seq_len,
             max_files=max_files_val,
-            num_workers=1,  # Reduced for memory efficiency
+            num_workers=args.num_workers,
             seed=42,
             use_random_masking=False,  # Fixed masking for validation
             masking_ratio=0.6,  # Standard masking ratio for evaluation
@@ -681,11 +702,18 @@ def main():
         max_seq_len=seq_len,
         use_gradient_checkpointing=use_gradient_checkpointing,
         use_mixed_precision=use_mixed_precision,
+        use_flash_attention=use_flash_attention,
     ).to(device)
 
     total_params = count_parameters(model)
     print(f"✅ Model created with {total_params:,} parameters")
     print(f"   Estimated GPU memory: ~{total_params * 4 / 1e9:.1f} GB")
+
+    # torch.compile() for 10-30% speedup
+    if args.compile:
+        print("🚀 Compiling model with torch.compile()...")
+        model = torch.compile(model, mode="reduce-overhead")
+        print("   Model compiled - first batch will be slow, then faster")
     print()
 
     # Setup memory-efficient optimizer and scheduler
@@ -779,6 +807,7 @@ def main():
                     "use_mixed_precision": use_mixed_precision,
                     "use_gradient_checkpointing": use_gradient_checkpointing,
                     "memory_efficient_optimizer": use_memory_efficient_optimizer,
+                    "use_flash_attention": use_flash_attention,
                     "val_data_dir": val_data_dir,
                     "val_split": val_split,
                     "max_files_train": max_files_train,
