@@ -399,6 +399,72 @@ def compute_reconstruction_error(
     return avg_error[:original_length]
 
 
+def compute_reconstruction_error_batched(
+    model,
+    flight_data_batch: List[np.ndarray],
+    original_lengths: List[int],
+    device: torch.device,
+    mask_ratio: float = 0.15,
+    num_samples: int = 5
+) -> List[np.ndarray]:
+    """
+    Compute per-timestep reconstruction error for a batch of flights.
+
+    Uses multiple random masks and averages the reconstruction error
+    for more robust anomaly scores.
+
+    Args:
+        model: The model to use for reconstruction
+        flight_data_batch: List of flight data arrays (already padded to same seq_len)
+        original_lengths: List of original lengths for each flight
+        device: torch device
+        mask_ratio: Ratio of features to mask
+        num_samples: Number of mask samples to average over
+
+    Returns:
+        List of reconstruction error arrays, one per flight (trimmed to original length)
+    """
+    batch_size = len(flight_data_batch)
+    seq_len, feat_dim = flight_data_batch[0].shape
+
+    # Stack into batch tensor
+    x_original = torch.tensor(
+        np.stack(flight_data_batch, axis=0),
+        dtype=torch.float32
+    ).to(device)  # (batch_size, seq_len, feat_dim)
+
+    all_errors = []
+
+    with torch.no_grad():
+        for _ in range(num_samples):
+            # Create random mask (1 = keep, 0 = mask)
+            mask = (torch.rand(batch_size, seq_len, feat_dim) > mask_ratio).float().to(device)
+
+            # Create masked input
+            x_masked = x_original * mask
+
+            # Get reconstruction
+            reconstruction = model(x_masked)
+
+            # Compute per-position error
+            error = (reconstruction - x_original) ** 2
+
+            # Average across features for per-timestep error
+            timestep_error = error.mean(dim=-1).cpu().numpy()  # (batch_size, seq_len)
+
+            all_errors.append(timestep_error)
+
+    # Average across samples: (num_samples, batch_size, seq_len) -> (batch_size, seq_len)
+    avg_errors = np.mean(all_errors, axis=0)
+
+    # Trim each flight to its original length
+    results = []
+    for i, orig_len in enumerate(original_lengths):
+        results.append(avg_errors[i, :orig_len])
+
+    return results
+
+
 def create_ground_truth_labels(
     original_length: int,
     flight_events: pd.DataFrame
@@ -504,8 +570,8 @@ def main():
                         help='Maximum number of files to evaluate')
 
     # Evaluation parameters
-    parser.add_argument('--batch_size', type=int, default=1,
-                        help='Batch size for evaluation (1 recommended for full flights)')
+    parser.add_argument('--batch_size', type=int, default=8,
+                        help='Batch size for evaluation (higher = faster but more GPU memory)')
 
     # Output parameters
     parser.add_argument('--output_dir', type=str, default='./anomaly_detection_results',
@@ -576,42 +642,66 @@ def main():
 
     seq_len = model_config.get('max_seq_len', 10000)
 
-    print(f"\nEvaluating with mask_ratio={args.mask_ratio}, num_samples={args.num_mask_samples}...")
+    print(f"\nEvaluating with mask_ratio={args.mask_ratio}, num_samples={args.num_mask_samples}, batch_size={args.batch_size}...")
 
-    for file_path in tqdm(flight_files, desc="Evaluating"):
+    # Collect flight metadata for batched processing
+    flight_metadata = []  # List of (file_path, flight_id)
+    for file_path in flight_files:
         flight_id = extract_flight_id(file_path)
+        if flight_id is not None:
+            flight_metadata.append((file_path, flight_id))
 
-        if flight_id is None:
+    # Process in batches
+    num_batches = (len(flight_metadata) + args.batch_size - 1) // args.batch_size
+
+    for batch_idx in tqdm(range(num_batches), desc="Evaluating batches"):
+        batch_start = batch_idx * args.batch_size
+        batch_end = min(batch_start + args.batch_size, len(flight_metadata))
+        batch_metadata = flight_metadata[batch_start:batch_end]
+
+        # Load all flights in this batch
+        batch_data = []
+        batch_lengths = []
+        batch_flight_ids = []
+        valid_indices = []
+
+        for i, (file_path, flight_id) in enumerate(batch_metadata):
+            try:
+                flight_data, original_length = load_and_normalize_flight(
+                    file_path, normalization_params, seq_len
+                )
+                batch_data.append(flight_data)
+                batch_lengths.append(original_length)
+                batch_flight_ids.append(flight_id)
+                valid_indices.append(i)
+            except Exception as e:
+                print(f"Error loading {file_path}: {e}")
+                continue
+
+        if not batch_data:
             continue
 
-        # Load and normalize flight
-        try:
-            flight_data, original_length = load_and_normalize_flight(
-                file_path, normalization_params, seq_len
-            )
-        except Exception as e:
-            print(f"Error loading {file_path}: {e}")
-            continue
-
-        # Compute reconstruction error
-        recon_error = compute_reconstruction_error(
-            model, flight_data, original_length, device,
+        # Compute reconstruction errors for the batch
+        batch_errors = compute_reconstruction_error_batched(
+            model, batch_data, batch_lengths, device,
             mask_ratio=args.mask_ratio,
             num_samples=args.num_mask_samples
         )
 
-        # Get ground truth labels
-        if flight_id in events_by_flight.groups:
-            flight_events = events_by_flight.get_group(flight_id)
-            flights_with_events += 1
-        else:
-            flight_events = pd.DataFrame()
+        # Process results and get ground truth
+        for recon_error, original_length, flight_id in zip(batch_errors, batch_lengths, batch_flight_ids):
+            # Get ground truth labels
+            if flight_id in events_by_flight.groups:
+                flight_events = events_by_flight.get_group(flight_id)
+                flights_with_events += 1
+            else:
+                flight_events = pd.DataFrame()
 
-        labels = create_ground_truth_labels(original_length, flight_events)
+            labels = create_ground_truth_labels(original_length, flight_events)
 
-        all_reconstruction_errors.append(recon_error)
-        all_ground_truth.append(labels)
-        flights_processed += 1
+            all_reconstruction_errors.append(recon_error)
+            all_ground_truth.append(labels)
+            flights_processed += 1
 
     print(f"\n  Processed {flights_processed} flights")
     print(f"  Flights with labeled events: {flights_with_events}")
