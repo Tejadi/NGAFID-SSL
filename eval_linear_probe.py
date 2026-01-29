@@ -714,12 +714,11 @@ def train_and_evaluate_aircraft_probe(
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
 
-    # Train multi-class classifier
+    # Train multi-class classifier (lbfgs uses multinomial by default for multi-class)
     clf = LogisticRegression(
         max_iter=1000,
         solver='lbfgs',
         random_state=seed,
-        multi_class='multinomial',
         class_weight='balanced',
         C=1.0,
     )
