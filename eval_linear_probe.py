@@ -14,11 +14,13 @@ import time
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -61,6 +63,14 @@ def parse_args():
                         help="Max files per split (for debugging)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
+    parser.add_argument("--batch_size", type=int, default=32,
+                        help="Batch size for inference (default: 32)")
+    parser.add_argument("--num_workers", type=int, default=4,
+                        help="Number of data loading workers (default: 4)")
+    parser.add_argument("--no_compile", action="store_true",
+                        help="Disable torch.compile() optimization")
+    parser.add_argument("--legacy", action="store_true",
+                        help="Use legacy single-sample extraction (slower)")
     return parser.parse_args()
 
 
@@ -291,51 +301,145 @@ def load_model(model_type: str, checkpoint_path: str, device: torch.device):
 
 # --- Representation extraction ---
 
+def extract_representation_batch(model, model_type: str, flight_data_batch: np.ndarray,
+                                  device: torch.device, use_amp: bool = True,
+                                  mlp_intermediate: nn.Module = None) -> np.ndarray:
+    """Extract flight-level representations for a batch of flights.
+
+    Args:
+        model: The pre-trained model
+        model_type: Type of model (simclr, bert, lstm, mlp)
+        flight_data_batch: numpy array of shape (batch_size, seq_len, feat_dim)
+        device: torch device
+        use_amp: Whether to use automatic mixed precision
+        mlp_intermediate: Pre-built intermediate MLP layers (for efficiency)
+
+    Returns:
+        numpy array of shape (batch_size, repr_dim)
+    """
+    # Handle torch.compile() wrapped models
+    base_model = getattr(model, '_orig_mod', model)
+
+    with torch.no_grad():
+        # Use autocast for AMP when on CUDA
+        amp_context = torch.autocast(device_type='cuda', dtype=torch.bfloat16) if (use_amp and device.type == 'cuda') else torch.inference_mode()
+
+        with amp_context:
+            if model_type == "simclr":
+                # Input: (B, 1, 4096, 41) — 2D image-like
+                x = torch.from_numpy(flight_data_batch).to(device, dtype=torch.float32, non_blocking=True)
+                x = x.unsqueeze(1)  # (B, 1, 4096, 41)
+                rep = model(x)  # (B, 512) after GAP + Identity projector
+                return rep.float().cpu().numpy()
+
+            elif model_type == "bert":
+                x = torch.from_numpy(flight_data_batch).to(device, dtype=torch.float32, non_blocking=True)
+                encoded = base_model.encoder(x)  # (B, seq_len, hidden_size)
+                rep = encoded.mean(dim=1)  # (B, hidden_size)
+                return rep.float().cpu().numpy()
+
+            elif model_type == "lstm":
+                x = torch.from_numpy(flight_data_batch).to(device, dtype=torch.float32, non_blocking=True)
+                projected = base_model.input_proj(x)
+                # Process in chunks to avoid memory issues
+                chunk_size = getattr(base_model, 'chunk_size', 2000) or 2000
+                chunks = []
+                for start in range(0, projected.shape[1], chunk_size):
+                    chunk = projected[:, start:start + chunk_size, :]
+                    chunk_out, _ = base_model.lstm(chunk)
+                    chunks.append(chunk_out)
+                lstm_out = torch.cat(chunks, dim=1)  # (B, seq_len, hidden)
+                rep = lstm_out.mean(dim=1)  # (B, hidden)
+                return rep.float().cpu().numpy()
+
+            elif model_type == "mlp":
+                x = torch.from_numpy(flight_data_batch).to(device, dtype=torch.float32, non_blocking=True)
+                batch_size, seq_len, feat_dim = x.shape
+                x_flat = x.reshape(-1, feat_dim)  # (B * seq_len, feat_dim)
+                hidden = mlp_intermediate(x_flat)  # (B * seq_len, hidden_dim)
+                hidden = hidden.reshape(batch_size, seq_len, -1)  # (B, seq_len, hidden_dim)
+                rep = hidden.mean(dim=1)  # (B, hidden_dim)
+                return rep.float().cpu().numpy()
+
+
 def extract_representation(model, model_type: str, flight_data: np.ndarray,
                            device: torch.device) -> np.ndarray:
-    """Extract a flight-level representation vector from a pre-trained model."""
-    with torch.no_grad():
-        if model_type == "simclr":
-            # Input: (1, 1, 4096, 41) — 2D image-like
-            x = torch.tensor(flight_data, dtype=torch.float32)
-            x = x.unsqueeze(0).unsqueeze(0).to(device)  # (1, 1, 4096, 41)
-            rep = model(x)  # (1, 512) after GAP + Identity projector
-            return rep.cpu().numpy().squeeze()
+    """Extract a flight-level representation vector from a pre-trained model.
 
-        elif model_type == "bert":
-            x = torch.tensor(flight_data, dtype=torch.float32)
-            x = x.unsqueeze(0).to(device)  # (1, 10000, 44)
-            encoded = model.encoder(x)  # (1, 10000, 1024)
-            rep = encoded.mean(dim=1)  # (1, 1024)
-            return rep.cpu().numpy().squeeze()
+    This is a convenience wrapper around extract_representation_batch for single samples.
+    """
+    # Add batch dimension and call batched version
+    flight_data_batch = flight_data[np.newaxis, ...]  # (1, seq_len, feat_dim)
+    rep_batch = extract_representation_batch(model, model_type, flight_data_batch, device)
+    return rep_batch.squeeze(0)  # Remove batch dimension
 
-        elif model_type == "lstm":
-            x = torch.tensor(flight_data, dtype=torch.float32)
-            x = x.unsqueeze(0).to(device)  # (1, 10000, 44)
-            projected = model.input_proj(x)
-            # Process in chunks to avoid memory issues
-            chunk_size = getattr(model, 'chunk_size', 2000) or 2000
-            chunks = []
-            for start in range(0, projected.shape[1], chunk_size):
-                chunk = projected[:, start:start + chunk_size, :]
-                chunk_out, _ = model.lstm(chunk)
-                chunks.append(chunk_out)
-            lstm_out = torch.cat(chunks, dim=1)  # (1, 10000, 512)
-            rep = lstm_out.mean(dim=1)  # (1, 512)
-            return rep.cpu().numpy().squeeze()
 
-        elif model_type == "mlp":
-            x = torch.tensor(flight_data, dtype=torch.float32)
-            x = x.unsqueeze(0).to(device)  # (1, 10000, 44)
-            # Extract penultimate hidden layer (all layers except final Linear)
-            intermediate = nn.Sequential(*list(model.mlp.children())[:-1])
-            intermediate.to(device)
-            batch_size, seq_len, feat_dim = x.shape
-            x_flat = x.reshape(-1, feat_dim)  # (10000, 44)
-            hidden = intermediate(x_flat)  # (10000, 256)
-            hidden = hidden.reshape(batch_size, seq_len, -1)  # (1, 10000, 256)
-            rep = hidden.mean(dim=1)  # (1, 256)
-            return rep.cpu().numpy().squeeze()
+class FlightDataset(Dataset):
+    """PyTorch Dataset for flight data with parallel loading support."""
+
+    def __init__(
+        self,
+        files: List[Path],
+        model_type: str,
+        normalization_params: Dict[str, np.ndarray],
+        event_flight_ids: Set[int],
+        event_type_flight_ids: Dict[str, Set[int]],
+        event_types: List[str],
+    ):
+        self.files = files
+        self.model_type = model_type
+        self.normalization_params = normalization_params
+        self.event_flight_ids = event_flight_ids
+        self.event_type_flight_ids = event_type_flight_ids
+        self.event_types = event_types
+
+        # Pre-filter files to only include valid ones (with extractable flight_id and aircraft_type)
+        self.valid_files = []
+        for f in files:
+            fid = extract_flight_id(f)
+            aircraft_type = extract_aircraft_type(f)
+            if fid is not None and aircraft_type is not None:
+                self.valid_files.append((f, fid, aircraft_type))
+
+    def __len__(self):
+        return len(self.valid_files)
+
+    def __getitem__(self, idx):
+        file_path, fid, aircraft_type = self.valid_files[idx]
+
+        # Load flight data
+        flight_data = load_flight_data(file_path, self.model_type, self.normalization_params)
+
+        # Compute labels
+        binary_label = 1 if fid in self.event_flight_ids else 0
+        multi_label = np.array([1 if fid in self.event_type_flight_ids[et] else 0
+                                for et in self.event_types], dtype=np.int64)
+        aircraft_idx = AIRCRAFT_TYPE_TO_IDX[aircraft_type]
+
+        return {
+            'flight_data': flight_data.astype(np.float32),
+            'flight_id': fid,
+            'binary_label': binary_label,
+            'multi_label': multi_label,
+            'aircraft_idx': aircraft_idx,
+        }
+
+
+def flight_collate_fn(batch):
+    """Custom collate function for FlightDataset."""
+    flight_data = np.stack([item['flight_data'] for item in batch])
+    flight_ids = [item['flight_id'] for item in batch]
+    binary_labels = np.array([item['binary_label'] for item in batch])
+    multi_labels = np.stack([item['multi_label'] for item in batch])
+    aircraft_indices = np.array([item['aircraft_idx'] for item in batch])
+
+    return {
+        'flight_data': flight_data,
+        'flight_ids': flight_ids,
+        'binary_labels': binary_labels,
+        'multi_labels': multi_labels,
+        'aircraft_indices': aircraft_indices,
+    }
 
 
 def extract_all_representations(
@@ -343,8 +447,110 @@ def extract_all_representations(
     event_flight_ids: Set[int], event_type_flight_ids: Dict[str, Set[int]],
     event_types: List[str], normalization_params: Dict,
     device: torch.device, max_files: Optional[int] = None,
+    batch_size: int = 16, num_workers: int = 4,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[int]]:
     """Extract representations and labels for all flights in a split.
+
+    Uses batched inference and parallel data loading for improved performance.
+
+    Args:
+        model: Pre-trained model
+        model_type: Type of model (simclr, bert, lstm, mlp)
+        data_dir: Root data directory
+        split: Data split (train, test, val)
+        event_flight_ids: Set of flight IDs with any anomaly
+        event_type_flight_ids: Dict mapping event type -> set of flight IDs
+        event_types: List of event type names
+        normalization_params: Dict with 'mean' and 'std' arrays
+        device: torch device
+        max_files: Optional limit on number of files to process
+        batch_size: Batch size for inference (default: 16)
+        num_workers: Number of parallel data loading workers (default: 4)
+
+    Returns:
+        X: representations (N, repr_dim)
+        y_binary: binary anomaly labels (N,)
+        y_multilabel: multi-label matrix (N, num_event_types)
+        y_aircraft: aircraft type labels (N,) - indices into AIRCRAFT_TYPES
+        flight_ids: list of flight IDs
+    """
+    files = get_split_files(data_dir, split)
+    if max_files is not None:
+        files = files[:max_files]
+
+    # Create dataset and dataloader
+    dataset = FlightDataset(
+        files, model_type, normalization_params,
+        event_flight_ids, event_type_flight_ids, event_types
+    )
+
+    # Use pin_memory for faster CPU->GPU transfer when using CUDA
+    pin_memory = device.type == 'cuda'
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        collate_fn=flight_collate_fn,
+        pin_memory=pin_memory,
+        prefetch_factor=2 if num_workers > 0 else None,
+        persistent_workers=num_workers > 0,
+    )
+
+    representations = []
+    binary_labels = []
+    multilabel_rows = []
+    aircraft_labels = []
+    flight_ids = []
+
+    total_batches = len(dataloader)
+    print(f"Processing {len(dataset)} valid flights in {total_batches} batches "
+          f"(batch_size={batch_size}, num_workers={num_workers})")
+
+    # Pre-build MLP intermediate layers once (avoid recreating every batch)
+    mlp_intermediate = None
+    if model_type == "mlp":
+        # Handle torch.compile() wrapped models
+        base_model = getattr(model, '_orig_mod', model)
+        mlp_intermediate = nn.Sequential(*list(base_model.mlp.children())[:-1])
+        mlp_intermediate.to(device)
+        mlp_intermediate.eval()
+
+    for batch in tqdm(dataloader, desc=f"Extracting {split} representations"):
+        # Extract representations for this batch
+        flight_data_batch = batch['flight_data']  # (B, seq_len, feat_dim)
+        reps = extract_representation_batch(model, model_type, flight_data_batch, device,
+                                            mlp_intermediate=mlp_intermediate)
+
+        representations.append(reps)
+        binary_labels.append(batch['binary_labels'])
+        multilabel_rows.append(batch['multi_labels'])
+        aircraft_labels.append(batch['aircraft_indices'])
+        flight_ids.extend(batch['flight_ids'])
+
+    # Concatenate all batches
+    X = np.concatenate(representations, axis=0)
+    y_binary = np.concatenate(binary_labels, axis=0)
+    y_multilabel = np.concatenate(multilabel_rows, axis=0)
+    y_aircraft = np.concatenate(aircraft_labels, axis=0)
+
+    skipped = len(files) - len(dataset)
+    if skipped > 0:
+        print(f"Skipped {skipped} flights in {split} (invalid flight_id or aircraft_type)")
+
+    return X, y_binary, y_multilabel, y_aircraft, flight_ids
+
+
+def extract_all_representations_legacy(
+    model, model_type: str, data_dir: str, split: str,
+    event_flight_ids: Set[int], event_type_flight_ids: Dict[str, Set[int]],
+    event_types: List[str], normalization_params: Dict,
+    device: torch.device, max_files: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[int]]:
+    """Legacy single-sample extraction (kept for debugging/comparison).
+
+    Extract representations and labels for all flights in a split.
 
     Returns:
         X: representations (N, repr_dim)
@@ -364,7 +570,7 @@ def extract_all_representations(
     flight_ids = []
     skipped = 0
 
-    for file_path in tqdm(files, desc=f"Extracting {split} representations"):
+    for file_path in tqdm(files, desc=f"Extracting {split} representations (legacy)"):
         fid = extract_flight_id(file_path)
         aircraft_type = extract_aircraft_type(file_path)
         if fid is None or aircraft_type is None:
@@ -598,12 +804,49 @@ def main():
     model = load_model(args.model_type, args.checkpoint, device)
     print("Model loaded.")
 
+    # Enable cudnn benchmark for consistent input sizes
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
+    # Compile model for faster inference (PyTorch 2.0+)
+    if not args.no_compile and hasattr(torch, 'compile'):
+        print("Compiling model with torch.compile()...")
+        model = torch.compile(model, mode='reduce-overhead')
+
+    # Warmup pass to initialize CUDA kernels
+    if torch.cuda.is_available():
+        print("Running warmup pass...")
+        seq_len = 4096 if args.model_type == "simclr" else 10000
+        feat_dim = len(norm_params['mean'])
+        dummy_batch = np.random.randn(2, seq_len, feat_dim).astype(np.float32)
+        mlp_intermediate = None
+        if args.model_type == "mlp":
+            # Handle torch.compile() wrapped models
+            base_model = getattr(model, '_orig_mod', model)
+            mlp_intermediate = nn.Sequential(*list(base_model.mlp.children())[:-1])
+            mlp_intermediate.to(device)
+            mlp_intermediate.eval()
+        _ = extract_representation_batch(model, args.model_type, dummy_batch, device,
+                                         mlp_intermediate=mlp_intermediate)
+        torch.cuda.synchronize()
+        del dummy_batch
+
+    # Select extraction function
+    if args.legacy:
+        print("\nUsing legacy single-sample extraction (--legacy flag set)")
+        extract_fn = extract_all_representations_legacy
+        extract_kwargs = {}
+    else:
+        print(f"\nUsing batched extraction (batch_size={args.batch_size}, num_workers={args.num_workers})")
+        extract_fn = extract_all_representations
+        extract_kwargs = {'batch_size': args.batch_size, 'num_workers': args.num_workers}
+
     # Extract representations
     print("\nExtracting train representations...")
-    X_train, y_train, y_train_multi, y_train_aircraft, train_ids = extract_all_representations(
+    X_train, y_train, y_train_multi, y_train_aircraft, train_ids = extract_fn(
         model, args.model_type, args.data_dir, "train",
         event_flight_ids, event_type_flight_ids, event_types,
-        norm_params, device, args.max_files,
+        norm_params, device, args.max_files, **extract_kwargs,
     )
     print(f"Train: {len(y_train)} flights, {y_train.sum()} with events "
           f"({y_train.mean():.1%}), repr dim: {X_train.shape[1]}")
@@ -611,10 +854,10 @@ def main():
         print(f"  {at}: {(y_train_aircraft == i).sum()} flights")
 
     print("\nExtracting test representations...")
-    X_test, y_test, y_test_multi, y_test_aircraft, test_ids = extract_all_representations(
+    X_test, y_test, y_test_multi, y_test_aircraft, test_ids = extract_fn(
         model, args.model_type, args.data_dir, "test",
         event_flight_ids, event_type_flight_ids, event_types,
-        norm_params, device, args.max_files,
+        norm_params, device, args.max_files, **extract_kwargs,
     )
     print(f"Test: {len(y_test)} flights, {y_test.sum()} with events "
           f"({y_test.mean():.1%}), repr dim: {X_test.shape[1]}")
