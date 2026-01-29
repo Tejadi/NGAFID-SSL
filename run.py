@@ -9,10 +9,16 @@ from datetime import datetime
 from torchvision import models
 from models.resnet_simclr import ResNetSimCLR
 from simclr import SimCLR
+<<<<<<< Updated upstream
 from ngafid_datasets.tf_idf import ScoreDatasetGenerator
 from ngafid_datasets.cos_similarity import ScoreDatasetGenerator
 from ngafid_datasets.flight_score_dataset import ScorePairDataset
 # from ngafid_datasets.flight_score_dataset import ScorePairDataset
+=======
+from datasets.tf_idf import ScoreDatasetGenerator
+# from datasets.cos_similarity import ScoreDatasetGenerator
+from datasets.flight_score_dataset import ScorePairDataset
+>>>>>>> Stashed changes
 from sample_flights.combine_flight_data import flight_paths
 from ngafid_datasets.default_iteration_dataset import DefaultIterationDataset
 from ngafid_datasets.transformation_dataset import TransformationDataset, TransformationDatasetReverse
@@ -280,12 +286,6 @@ def main():
             simclr.train(train_loader, None if args.disable_wandb else wandb)
 
         visualize(model, args, visualization_loader, ["PCA", "TSNE"])
-
-
-
-
-
-
 
 
 # def old():

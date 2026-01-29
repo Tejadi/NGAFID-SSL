@@ -130,7 +130,7 @@ def parse_args():
 def setup_device(device_str: str) -> torch.device:
     if device_str == "auto":
         if torch.cuda.is_available():
-            device = torch.device("cuda")
+            device = torch.device("cuda:0")
             print(f"Using CUDA: {torch.cuda.get_device_name()}")
         else:
             device = torch.device("cpu")
