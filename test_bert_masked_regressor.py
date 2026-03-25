@@ -2,12 +2,147 @@ import torch
 import numpy as np
 import pandas as pd
 import os
+import json
 from torch.utils.data import DataLoader, TensorDataset
 from ngafid_datasets.transformation_dataset import mask_transform, sequential_mask_transform
 import argparse
 from tqdm import tqdm
+from sklearn.metrics import roc_auc_score
 from utils import load_flight_data, plot_aircraft_type_comparison, plot_reconstructions, get_aircraft_counts, load_sequence_lengths, plot_sequential_reconstructions
 from models.bert_masked_regressor import BertMaskedRegressor
+
+def load_anomaly_labels(labels_csv, events_csv=None):
+    """Load binary anomaly labels per flight.
+
+    Supports two formats:
+      1. A labels CSV with columns: flight_id, label  (1 = anomalous, 0 = normal)
+      2. An events CSV (NGAFID format) with columns including flight_id.
+         Any flight that appears in the events file is labelled anomalous.
+         Requires a flight_ids CSV to know the full set of flights.
+    """
+    if labels_csv is not None:
+        df = pd.read_csv(labels_csv)
+        if 'label' not in df.columns or 'flight_id' not in df.columns:
+            raise ValueError("labels_csv must have columns: flight_id, label")
+        return dict(zip(df['flight_id'], df['label'].astype(int)))
+
+    if events_csv is not None:
+        events = pd.read_csv(events_csv)
+        anomalous_ids = set(events['flight_id'].unique())
+        return anomalous_ids  # caller will use set membership
+
+    raise ValueError("Provide either --labels_csv or --events_csv for anomaly evaluation")
+
+
+def compute_topk_metrics(scores, labels, ks=(0.01, 0.02, 0.05, 0.10)):
+    """Compute precision@k and recall@k for top-k anomaly retrieval.
+
+    Args:
+        scores: np.array of anomaly scores (higher = more anomalous), shape (n,)
+        labels: np.array of binary labels (1 = anomalous), shape (n,)
+        ks: tuple of floats in (0,1] interpreted as percentages of n,
+            or ints > 1 interpreted as absolute counts.
+
+    Returns:
+        list of dicts with keys: k_pct, k_abs, precision, recall, num_retrieved, num_true_in_topk, total_anomalies
+    """
+    n = len(scores)
+    total_anomalies = int(labels.sum())
+    # Sort descending by score
+    ranked_indices = np.argsort(scores)[::-1]
+    ranked_labels = labels[ranked_indices]
+
+    results = []
+    for k in ks:
+        if isinstance(k, float) and k <= 1.0:
+            k_abs = max(1, int(np.ceil(k * n)))
+            k_pct = k
+        else:
+            k_abs = int(k)
+            k_pct = k_abs / n
+
+        topk_labels = ranked_labels[:k_abs]
+        num_true = int(topk_labels.sum())
+        precision = num_true / k_abs if k_abs > 0 else 0.0
+        recall = num_true / total_anomalies if total_anomalies > 0 else 0.0
+
+        results.append({
+            'k_pct': f"{k_pct:.1%}",
+            'k_abs': k_abs,
+            'precision': round(precision, 4),
+            'recall': round(recall, 4),
+            'num_true_in_topk': num_true,
+            'num_retrieved': k_abs,
+            'total_anomalies': total_anomalies,
+        })
+
+    return results
+
+
+def run_anomaly_eval(flight_scores, labels_csv=None, events_csv=None,
+                     ks=(0.01, 0.02, 0.05, 0.10), output_path='topk_anomaly_metrics.json'):
+    """Full anomaly evaluation: ROC-AUC + top-k retrieval metrics.
+
+    Args:
+        flight_scores: DataFrame with columns flight_id, anomaly_score
+        labels_csv: path to CSV with flight_id,label columns
+        events_csv: path to NGAFID events CSV (alternative label source)
+        ks: k values for top-k metrics
+        output_path: where to save JSON results
+    """
+    label_source = load_anomaly_labels(labels_csv, events_csv)
+
+    if isinstance(label_source, set):
+        # events-based: membership = anomalous
+        flight_scores['label'] = flight_scores['flight_id'].apply(
+            lambda fid: 1 if fid in label_source else 0)
+    else:
+        # dict-based
+        flight_scores['label'] = flight_scores['flight_id'].map(label_source)
+        missing = flight_scores['label'].isna().sum()
+        if missing > 0:
+            print(f"Warning: {missing} flights have no label and will be dropped")
+            flight_scores = flight_scores.dropna(subset=['label'])
+        flight_scores['label'] = flight_scores['label'].astype(int)
+
+    scores = flight_scores['anomaly_score'].values
+    labels = flight_scores['label'].values
+
+    total = len(labels)
+    n_pos = int(labels.sum())
+    n_neg = total - n_pos
+    print(f"\nAnomaly evaluation: {total} flights, {n_pos} anomalous, {n_neg} normal")
+
+    # ROC-AUC
+    if n_pos == 0 or n_neg == 0:
+        print("Warning: Only one class present, ROC-AUC is undefined")
+        auc = None
+    else:
+        auc = roc_auc_score(labels, scores)
+        print(f"ROC-AUC: {auc:.4f}")
+
+    # Top-k retrieval
+    topk_results = compute_topk_metrics(scores, labels, ks)
+
+    print(f"\n{'k':<10} {'k_abs':<8} {'Prec@k':<10} {'Rec@k':<10} {'#True':<8} {'#Ret':<8}")
+    print("-" * 54)
+    for r in topk_results:
+        print(f"{r['k_pct']:<10} {r['k_abs']:<8} {r['precision']:<10.4f} {r['recall']:<10.4f} {r['num_true_in_topk']:<8} {r['num_retrieved']:<8}")
+
+    # Save results
+    output = {
+        'roc_auc': auc,
+        'total_flights': total,
+        'total_anomalies': n_pos,
+        'total_normal': n_neg,
+        'topk_metrics': topk_results,
+    }
+    with open(output_path, 'w') as f:
+        json.dump(output, f, indent=2)
+    print(f"\nResults saved to {output_path}")
+
+    return output
+
 
 def load_bert_model(model_path, feat_dim, hidden_size, encoder_layers, decoder_layers, num_heads, max_seq_len, device):
     """Load trained BERT masked regressor model."""
@@ -44,6 +179,8 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
     all_orig = []
     all_recon = []
     all_masks = []
+    per_flight_mse = []
+    per_flight_ids = []
 
     with torch.no_grad():
         for data, batch_ids in tqdm(test_loader, desc="Evaluating", unit="batch"):
@@ -77,6 +214,11 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
             mae = np.mean(np.abs(original_norm - recon_norm))
             mse = np.mean((original_norm - recon_norm) ** 2)
 
+            # Per-flight MSE: mean over (seq_len, feat_dim) for each sample
+            flight_mses = np.mean((original_norm - recon_norm) ** 2, axis=(1, 2))
+            per_flight_mse.extend(flight_mses.tolist())
+            per_flight_ids.extend(batch_ids.numpy().tolist())
+
             total_mae += mae
             total_mse += mse
             num_batches += 1
@@ -98,7 +240,12 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
         'rmse': rmse
     }
 
-    return metrics, np.concatenate(all_orig), np.concatenate(all_recon), np.concatenate(all_masks)
+    flight_scores = pd.DataFrame({
+        'flight_id': per_flight_ids,
+        'anomaly_score': per_flight_mse
+    })
+
+    return metrics, np.concatenate(all_orig), np.concatenate(all_recon), np.concatenate(all_masks), flight_scores
 
 def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map, normalization_params, batch_size=32,
                             mask_length=10, start_point=0.5, device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -106,9 +253,11 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
 
     test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
 
+    flight_ids_list = list(flight_ids)
     test_dataset = TensorDataset(
         torch.FloatTensor(test_data_normalized),
-        torch.LongTensor([sequence_length_map[id] for id in flight_ids])
+        torch.LongTensor([sequence_length_map[id] for id in flight_ids]),
+        torch.LongTensor(flight_ids_list)
     )
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
@@ -118,9 +267,11 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
     all_orig = []
     all_recon = []
     all_masks = []
+    per_flight_mse = []
+    per_flight_ids = []
 
     with torch.no_grad():
-        for data, seq_lengths in tqdm(test_loader, desc="Evaluating", unit="batch"):
+        for data, seq_lengths, batch_ids in tqdm(test_loader, desc="Evaluating", unit="batch"):
             data = data.to(device)
 
             original_data = data.cpu().numpy()
@@ -149,6 +300,11 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
             mae = np.mean(np.abs(original_norm - recon_norm))
             mse = np.mean((original_norm - recon_norm) ** 2)
 
+            # Per-flight MSE: mean over (seq_len, feat_dim) for each sample
+            flight_mses = np.mean((original_norm - recon_norm) ** 2, axis=(1, 2))
+            per_flight_mse.extend(flight_mses.tolist())
+            per_flight_ids.extend(batch_ids.numpy().tolist())
+
             total_mae += mae
             total_mse += mse
             num_batches += 1
@@ -170,7 +326,12 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
         'rmse': rmse
     }
 
-    return metrics, np.concatenate(all_orig), np.concatenate(all_recon), np.concatenate(all_masks)
+    flight_scores = pd.DataFrame({
+        'flight_id': per_flight_ids,
+        'anomaly_score': per_flight_mse
+    })
+
+    return metrics, np.concatenate(all_orig), np.concatenate(all_recon), np.concatenate(all_masks), flight_scores
 
 def evaluate_model_per_feature(model, test_data, flight_ids, normalization_params, batch_size=32, masking_ratio=0.5, mean_mask_length=60,
                                 device="cuda" if torch.cuda.is_available() else "cpu"):
@@ -366,6 +527,18 @@ if __name__ == "__main__":
     random_group.add_argument('--mean_mask_length', type=int,
                       help='Average length of masking subsequences for random masking')
 
+    anomaly_group = parser.add_argument_group('Anomaly detection evaluation')
+    anomaly_group.add_argument('--anomaly_eval', action='store_true',
+                      help='Run top-k anomaly retrieval evaluation')
+    anomaly_group.add_argument('--labels_csv', type=str,
+                      help='CSV with columns: flight_id, label (1=anomalous, 0=normal)')
+    anomaly_group.add_argument('--events_csv', type=str,
+                      help='NGAFID events CSV (flights with events are anomalous)')
+    anomaly_group.add_argument('--topk_output', type=str, default='topk_anomaly_metrics.json',
+                      help='Output JSON file for top-k metrics (default: topk_anomaly_metrics.json)')
+    anomaly_group.add_argument('--topk_values', type=float, nargs='+', default=[0.01, 0.02, 0.05, 0.10],
+                      help='Top-k percentages to evaluate (default: 0.01 0.02 0.05 0.10)')
+
     args = parser.parse_args()
 
 
@@ -377,6 +550,9 @@ if __name__ == "__main__":
         if any(param is None for param in [args.masking_ratio, args.mean_mask_length]):
             parser.error("When using random masking (default), the following arguments are required: "
                         "--masking_ratio, --mean_mask_length")
+
+    if args.anomaly_eval and args.labels_csv is None and args.events_csv is None:
+        parser.error("--anomaly_eval requires either --labels_csv or --events_csv")
 
     print("Analyzing aircraft types in the data directory...")
     aircraft_counts = get_aircraft_counts(args.data_dir)
@@ -404,7 +580,7 @@ if __name__ == "__main__":
     print("Evaluating model...")
     if args.use_sequential:
         sequence_length_map = load_sequence_lengths(args.sequence_length_csv)
-        metrics, orig_data, recon_data, masks = evaluate_sequential_model(
+        metrics, orig_data, recon_data, masks, flight_scores = evaluate_sequential_model(
             model,
             test_data,
             flight_ids,
@@ -416,7 +592,7 @@ if __name__ == "__main__":
             device=device
         )
     else:
-        metrics, orig_data, recon_data, masks = evaluate_model(
+        metrics, orig_data, recon_data, masks, flight_scores = evaluate_model(
             model,
             test_data,
             flight_ids,
@@ -431,6 +607,19 @@ if __name__ == "__main__":
     print(f"MAE: {metrics['mae']:.6f}")
     print(f"MSE: {metrics['mse']:.6f}")
     print(f"RMSE: {metrics['rmse']:.6f}")
+
+    # Anomaly detection evaluation
+    if args.anomaly_eval:
+        print("\n" + "="*60)
+        print("Running anomaly detection evaluation (top-k retrieval)")
+        print("="*60)
+        run_anomaly_eval(
+            flight_scores,
+            labels_csv=args.labels_csv,
+            events_csv=args.events_csv,
+            ks=tuple(args.topk_values),
+            output_path=args.topk_output,
+        )
 
     # Per-feature analysis
     if args.per_feature_analysis:
