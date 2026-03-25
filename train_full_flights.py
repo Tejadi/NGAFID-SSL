@@ -150,6 +150,8 @@ class GlobalNormalizedFlightDataset(LocalFlightDataset):
         use_random_masking: bool = False,
         masking_ratios: List[float] = [0.2, 0.5, 0.8],
         mean_mask_lengths: List[int] = [5, 60],
+        aircraft_types: Optional[List[str]] = None,
+        data_scale: float = 1.0,
         **kwargs
     ):
         # Remove masking parameters from kwargs if using random masking
@@ -165,6 +167,18 @@ class GlobalNormalizedFlightDataset(LocalFlightDataset):
         self.use_random_masking = use_random_masking
         self.masking_ratios = masking_ratios
         self.mean_mask_lengths = mean_mask_lengths
+
+        # Apply aircraft type filter
+        if aircraft_types is not None:
+            before = len(self.split_files)
+            self.split_files = filter_files_by_aircraft(self.split_files, aircraft_types)
+            print(f"Aircraft filter {aircraft_types}: {before} -> {len(self.split_files)} files")
+
+        # Apply data scaling
+        if data_scale < 1.0:
+            before = len(self.split_files)
+            self.split_files = apply_data_scale(self.split_files, data_scale, seed=kwargs.get('seed', 42))
+            print(f"Data scale {data_scale:.0%}: {before} -> {len(self.split_files)} files")
 
         if use_random_masking:
             print(f"✨ Using random masking with {len(masking_ratios)} ratios × {len(mean_mask_lengths)} lengths = {len(masking_ratios) * len(mean_mask_lengths)} combinations")
@@ -316,6 +330,8 @@ def create_global_normalized_dataloader(
     use_random_masking: bool = False,
     masking_ratios: List[float] = [0.2, 0.5, 0.8],
     mean_mask_lengths: List[int] = [5, 60],
+    aircraft_types: Optional[List[str]] = None,
+    data_scale: float = 1.0,
 ) -> DataLoader:
     """
     Create a DataLoader for local flight data with global normalization and optional random masking.
@@ -336,6 +352,8 @@ def create_global_normalized_dataloader(
         use_random_masking: Whether to use random masking parameters
         masking_ratios: List of masking ratios to randomly choose from
         mean_mask_lengths: List of mean mask lengths to randomly choose from
+        aircraft_types: List of aircraft type prefixes to filter by (None for all)
+        data_scale: Fraction of data to use (0.0-1.0)
 
     Returns:
         DataLoader yielding batches of (x_masked, x_original, mask)
@@ -354,6 +372,8 @@ def create_global_normalized_dataloader(
         use_random_masking=use_random_masking,
         masking_ratios=masking_ratios,
         mean_mask_lengths=mean_mask_lengths,
+        aircraft_types=aircraft_types,
+        data_scale=data_scale,
     )
 
     return DataLoader(
@@ -414,6 +434,40 @@ def evaluate_model(model, dataloader, device, max_batches: int = 50) -> Dict[str
     }
 
 
+def filter_files_by_aircraft(file_list, aircraft_types):
+    """Filter a list of file paths to only include specified aircraft types.
+
+    Args:
+        file_list: List of Path objects (CSV flight files)
+        aircraft_types: List of aircraft type prefixes (e.g., ["Cessna_172S", "PA-28-181"])
+
+    Returns:
+        Filtered list of Path objects
+    """
+    filtered = [f for f in file_list if any(f.name.startswith(at) for at in aircraft_types)]
+    return filtered
+
+
+def apply_data_scale(file_list, scale, seed=42):
+    """Subsample a file list to a given fraction for data scaling experiments.
+
+    Args:
+        file_list: List of Path objects
+        scale: Fraction of data to keep (0.0-1.0)
+        seed: Random seed for reproducible subsampling
+
+    Returns:
+        Subsampled list of Path objects
+    """
+    if scale >= 1.0:
+        return file_list
+    rng = np.random.RandomState(seed)
+    n_keep = max(1, int(len(file_list) * scale))
+    indices = rng.choice(len(file_list), size=n_keep, replace=False)
+    indices.sort()
+    return [file_list[i] for i in indices]
+
+
 def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Train BERT masked regressor on full flights")
@@ -423,19 +477,64 @@ def main():
                         help="Fixed masking ratio (default: 0.5, only used with --use_fixed_masking)")
     parser.add_argument("--mean_mask_length", type=int, default=60,
                         help="Fixed mean mask length (default: 60, only used with --use_fixed_masking)")
+    parser.add_argument("--wandb_project", type=str, default="bert-flight-full",
+                        help="W&B project name")
+    parser.add_argument("--wandb_entity", type=str, default=None,
+                        help="W&B entity/team name")
+    parser.add_argument("--no_wandb", action="store_true",
+                        help="Disable W&B logging")
+    parser.add_argument("--data_dir", type=str, default="/oscar/data/sbach/shared/ngafid",
+                        help="Path to data directory (parent of preprocessed_data/)")
+    parser.add_argument("--checkpoint_dir", type=str, default=None,
+                        help="Directory to save model checkpoints (default: ./checkpoints/bert_models_<timestamp>)")
+
+    # Data filtering arguments
+    parser.add_argument("--aircraft_type", type=str, nargs='+', default=None,
+                        choices=["Cessna_172S", "PA-28-181", "PA-44-180"],
+                        help="Filter training data to specific aircraft type(s)")
+    parser.add_argument("--aircraft_class", type=str, default=None,
+                        choices=["single_engine", "multi_engine"],
+                        help="Filter training data by aircraft class (single_engine=Cessna_172S+PA-28-181, multi_engine=PA-44-180)")
+    parser.add_argument("--data_scale", type=float, default=1.0,
+                        help="Fraction of training data to use (0.0-1.0) for data scaling experiments")
+    parser.add_argument("--use_flash_attention", action="store_true",
+                        help="Enable Flash Attention 2 for O(n) memory attention (requires flash-attn package)")
+    parser.add_argument("--batch_size", type=int, default=4,
+                        help="Batch size for training (default: 4, increase with Flash Attention)")
+    parser.add_argument("--gradient_accumulation", type=int, default=8,
+                        help="Gradient accumulation steps (default: 8)")
+    parser.add_argument("--compile", action="store_true",
+                        help="Use torch.compile() for 10-30%% speedup (PyTorch 2.0+)")
+    parser.add_argument("--num_workers", type=int, default=4,
+                        help="Number of DataLoader workers (default: 4)")
     args = parser.parse_args()
+
+    # Resolve aircraft_class to aircraft_type list
+    AIRCRAFT_CLASS_MAP = {
+        "single_engine": ["Cessna_172S", "PA-28-181"],
+        "multi_engine": ["PA-44-180"],
+    }
+    if args.aircraft_class is not None:
+        if args.aircraft_type is not None:
+            print("Warning: --aircraft_class overrides --aircraft_type")
+        args.aircraft_type = AIRCRAFT_CLASS_MAP[args.aircraft_class]
 
     # Memory-optimized configuration for Oscar cluster training
     print("🚀 Starting Memory-Optimized BERT Flight Training")
     print("=" * 60)
 
     # Dataset and model configuration
-    data_dir = "/oscar/data/sbach/shared/ngafid"
+    data_dir = args.data_dir
     seq_len = 10000  # Full flight sequences (non-negotiable)
-    batch_size = 4   # Ultra-conservative for seq_len=10000
-    gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
+    batch_size = args.batch_size
+    gradient_accumulation_steps = args.gradient_accumulation
     epochs = 50
     learning_rate = 1e-4  # Slightly higher due to smaller batch size
+    use_flash_attention = args.use_flash_attention
+
+    if use_flash_attention:
+        print("Flash Attention 2 enabled - using O(n) memory for attention")
+        print("  Recommended: --batch_size 16 --gradient_accumulation 2 for A100 80GB")
 
     # Model architecture (memory-optimized)
     hidden_size = 1024  # Reduced from 1536
@@ -448,7 +547,7 @@ def main():
     warmup_steps = 1000  # Reduced proportionally
     eval_interval = 500  # More frequent evaluation
     save_interval = 2000
-    max_files_train = 400  # Reduced for faster epochs
+    max_files_train = None  # Use all available files
     max_files_val = 100
 
     # Memory optimization settings
@@ -470,6 +569,12 @@ def main():
         device = torch.device("cuda")
         print(f"🔥 Using GPU: {torch.cuda.get_device_name()}")
         print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+
+        # A100/H100 optimizations
+        torch.backends.cuda.matmul.allow_tf32 = True  # TF32 for faster matmuls
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+        print(f"   TF32 enabled: matmul speedup on A100/H100")
     else:
         device = torch.device("cpu")
         print("⚠️  Using CPU (GPU not available)")
@@ -531,6 +636,12 @@ def main():
         masking_ratio = 0.6  # Default for fallback
         mean_mask_length = 3  # Default for fallback
 
+    # Print data filtering info
+    if args.aircraft_type:
+        print(f"Aircraft filter: {args.aircraft_type}")
+    if args.data_scale < 1.0:
+        print(f"Data scale: {args.data_scale:.0%}")
+
     try:
         train_loader = create_global_normalized_dataloader(
             data_dir=data_dir,
@@ -539,18 +650,20 @@ def main():
             batch_size=batch_size,
             seq_len=seq_len,
             max_files=max_files_train,
-            num_workers=1,  # Reduced for memory efficiency
+            num_workers=args.num_workers,
             seed=42,
             use_random_masking=use_random_masking,
             masking_ratio=masking_ratio,
             mean_mask_length=mean_mask_length,
             masking_ratios=masking_ratios,
-            mean_mask_lengths=mean_mask_lengths
+            mean_mask_lengths=mean_mask_lengths,
+            aircraft_types=args.aircraft_type,
+            data_scale=args.data_scale,
         )
 
         # Use fixed masking for validation (for consistent evaluation)
         # Use dedicated validation directory if it exists
-        val_data_dir = "/oscar/data/sbach/shared/ngafid/preprocessed_data/val"
+        val_data_dir = os.path.join(data_dir, "preprocessed_data", "val")
         if not os.path.exists(val_data_dir):
             print(f"⚠️  Validation directory {val_data_dir} not found, using splits from main data")
             val_data_dir = data_dir
@@ -566,7 +679,7 @@ def main():
             batch_size=batch_size,
             seq_len=seq_len,
             max_files=max_files_val,
-            num_workers=1,  # Reduced for memory efficiency
+            num_workers=args.num_workers,
             seed=42,
             use_random_masking=False,  # Fixed masking for validation
             masking_ratio=0.6,  # Standard masking ratio for evaluation
@@ -589,11 +702,18 @@ def main():
         max_seq_len=seq_len,
         use_gradient_checkpointing=use_gradient_checkpointing,
         use_mixed_precision=use_mixed_precision,
+        use_flash_attention=use_flash_attention,
     ).to(device)
 
     total_params = count_parameters(model)
     print(f"✅ Model created with {total_params:,} parameters")
     print(f"   Estimated GPU memory: ~{total_params * 4 / 1e9:.1f} GB")
+
+    # torch.compile() for 10-30% speedup
+    if args.compile:
+        print("🚀 Compiling model with torch.compile()...")
+        model = torch.compile(model, mode="reduce-overhead")
+        print("   Model compiled - first batch will be slow, then faster")
     print()
 
     # Setup memory-efficient optimizer and scheduler
@@ -656,11 +776,12 @@ def main():
     writer = SummaryWriter(log_dir=f"{output_dir}/tensorboard")
 
     # W&B
-    use_wandb = WANDB_AVAILABLE
+    use_wandb = WANDB_AVAILABLE and not args.no_wandb
     if use_wandb:
         try:
             wandb.init(
-                project="bert-flight-full",
+                project=args.wandb_project,
+                entity=args.wandb_entity,
                 name=job_name,
                 config={
                     "seq_len": seq_len,
@@ -686,10 +807,14 @@ def main():
                     "use_mixed_precision": use_mixed_precision,
                     "use_gradient_checkpointing": use_gradient_checkpointing,
                     "memory_efficient_optimizer": use_memory_efficient_optimizer,
+                    "use_flash_attention": use_flash_attention,
                     "val_data_dir": val_data_dir,
                     "val_split": val_split,
                     "max_files_train": max_files_train,
                     "max_files_val": max_files_val,
+                    "aircraft_type": args.aircraft_type,
+                    "aircraft_class": args.aircraft_class,
+                    "data_scale": args.data_scale,
                     "warmup_steps": warmup_steps,
                     "eval_interval": eval_interval,
                     "save_interval": save_interval,
@@ -705,7 +830,10 @@ def main():
 
     # Create save directory for this training run in local checkpoints folder
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    save_dir = f"/oscar/home/cduong5/NGAFID-SSL/checkpoints/bert_models_{timestamp}"
+    if args.checkpoint_dir is not None:
+        save_dir = args.checkpoint_dir
+    else:
+        save_dir = f"./checkpoints/bert_models_{timestamp}"
     os.makedirs(save_dir, exist_ok=True)
     print(f"💾 Models will be saved to: {save_dir}")
 
@@ -714,8 +842,8 @@ def main():
     global_step = 0
     best_eval_loss = float('inf')
 
-    # Epochs to save models at
-    save_epochs = [15, 30, 50]
+    # Epochs to save models at (every 5 epochs)
+    save_epochs = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
 
     for epoch in range(epochs):
         model.train()

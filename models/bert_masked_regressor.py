@@ -30,15 +30,35 @@ class FlightBertEncoder(nn.Module):
         dropout: float = 0.1,
         max_position_embeddings: int = 512,
         use_gradient_checkpointing: bool = True,
+        use_flash_attention: bool = False,
     ):
         super().__init__()
 
         self.feat_dim = feat_dim
         self.hidden_size = hidden_size
         self.use_gradient_checkpointing = use_gradient_checkpointing
+        self.use_flash_attention = use_flash_attention
 
         # Project flight features to BERT embedding dimension
         self.feature_projection = nn.Linear(feat_dim, hidden_size)
+
+        # Check if Flash Attention is available
+        attn_implementation = "eager"
+        if use_flash_attention:
+            # Try flash_attn package first, then fall back to PyTorch SDPA
+            try:
+                import flash_attn
+                attn_implementation = "flash_attention_2"
+                print(f"  Using Flash Attention 2 for O(n) memory attention")
+            except ImportError:
+                # PyTorch 2.0+ has native SDPA with flash attention support
+                import torch
+                if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
+                    attn_implementation = "sdpa"
+                    print(f"  Using PyTorch SDPA (native memory-efficient attention)")
+                else:
+                    print(f"  Flash Attention not available, using standard attention")
+                    attn_implementation = "eager"
 
         # BERT configuration
         config = BertConfig(
@@ -57,7 +77,14 @@ class FlightBertEncoder(nn.Module):
         )
 
         # Initialize BERT without embeddings (we'll use our own projection)
-        self.bert = BertModel(config, add_pooling_layer=False)
+        # Note: attn_implementation requires transformers >= 4.36.0
+        try:
+            self.bert = BertModel(config, add_pooling_layer=False, attn_implementation=attn_implementation)
+        except TypeError:
+            # Older transformers version - fall back to default attention
+            if attn_implementation != "eager":
+                print(f"  Warning: transformers version too old for {attn_implementation}, using default attention")
+            self.bert = BertModel(config, add_pooling_layer=False)
         # Remove the word embeddings since we project features directly
         del self.bert.embeddings.word_embeddings
 
@@ -239,6 +266,7 @@ class BertMaskedRegressor(nn.Module):
         max_seq_len: int = 512,
         use_gradient_checkpointing: bool = True,
         use_mixed_precision: bool = True,
+        use_flash_attention: bool = False,
     ):
         super().__init__()
 
@@ -246,6 +274,7 @@ class BertMaskedRegressor(nn.Module):
         self.hidden_size = hidden_size
         self.use_gradient_checkpointing = use_gradient_checkpointing
         self.use_mixed_precision = use_mixed_precision
+        self.use_flash_attention = use_flash_attention
 
         # BERT encoder with gradient checkpointing
         self.encoder = FlightBertEncoder(
@@ -256,6 +285,7 @@ class BertMaskedRegressor(nn.Module):
             dropout=dropout,
             max_position_embeddings=max_seq_len,
             use_gradient_checkpointing=use_gradient_checkpointing,
+            use_flash_attention=use_flash_attention,
         )
 
         # Decoder with gradient checkpointing

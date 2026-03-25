@@ -1,0 +1,16 @@
+name: ngafid
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - torch>=2.0.0
+    - torchvision>=0.15.0
+    - transformers
+    - pandas
+    - numpy
+    - scikit-learn
+    - tqdm
+    - wandb
+    - tensorboard
