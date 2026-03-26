@@ -146,6 +146,19 @@ def run_anomaly_eval(flight_scores, labels_csv=None, events_csv=None,
 
 def load_bert_model(model_path, feat_dim, hidden_size, encoder_layers, decoder_layers, num_heads, max_seq_len, device):
     """Load trained BERT masked regressor model."""
+    checkpoint = torch.load(model_path, map_location=device)
+
+    # Use config from checkpoint if available (overrides CLI defaults)
+    if 'config' in checkpoint:
+        cfg = checkpoint['config']
+        hidden_size = cfg.get('hidden_size', hidden_size)
+        encoder_layers = cfg.get('encoder_layers', encoder_layers)
+        decoder_layers = cfg.get('decoder_layers', decoder_layers)
+        num_heads = cfg.get('num_heads', num_heads)
+        max_seq_len = cfg.get('seq_len', max_seq_len)
+        print(f"  Using checkpoint config: hidden={hidden_size}, enc_layers={encoder_layers}, "
+              f"dec_layers={decoder_layers}, heads={num_heads}, seq_len={max_seq_len}")
+
     model = BertMaskedRegressor(
         feat_dim=feat_dim,
         hidden_size=hidden_size,
@@ -157,8 +170,11 @@ def load_bert_model(model_path, feat_dim, hidden_size, encoder_layers, decoder_l
         use_mixed_precision=False,  # Disable during inference
     )
 
-    checkpoint = torch.load(model_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    # Strip _orig_mod. prefix added by torch.compile()
+    state_dict = checkpoint['model_state_dict']
+    state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
+    model.load_state_dict(state_dict)
     model = model.to(device)
     model.eval()
     return model
