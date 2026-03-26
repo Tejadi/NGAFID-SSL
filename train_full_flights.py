@@ -493,8 +493,8 @@ def main():
                         choices=["Cessna_172S", "PA-28-181", "PA-44-180"],
                         help="Filter training data to specific aircraft type(s)")
     parser.add_argument("--aircraft_class", type=str, default=None,
-                        choices=["single_engine", "multi_engine"],
-                        help="Filter training data by aircraft class (single_engine=Cessna_172S+PA-28-181, multi_engine=PA-44-180)")
+                        choices=["single_engine", "multi_engine", "Cessna_172S", "PA-28-181", "PA-44-180"],
+                        help="Filter training data by aircraft class or specific type (single_engine=Cessna_172S+PA-28-181, multi_engine=PA-44-180, or pass a specific type)")
     parser.add_argument("--data_scale", type=float, default=1.0,
                         help="Fraction of training data to use (0.0-1.0) for data scaling experiments")
     parser.add_argument("--use_flash_attention", action="store_true",
@@ -517,7 +517,11 @@ def main():
     if args.aircraft_class is not None:
         if args.aircraft_type is not None:
             print("Warning: --aircraft_class overrides --aircraft_type")
-        args.aircraft_type = AIRCRAFT_CLASS_MAP[args.aircraft_class]
+        if args.aircraft_class in AIRCRAFT_CLASS_MAP:
+            args.aircraft_type = AIRCRAFT_CLASS_MAP[args.aircraft_class]
+        else:
+            # Specific aircraft type passed directly (e.g., "Cessna_172S")
+            args.aircraft_type = [args.aircraft_class]
 
     # Memory-optimized configuration for Oscar cluster training
     print("🚀 Starting Memory-Optimized BERT Flight Training")
