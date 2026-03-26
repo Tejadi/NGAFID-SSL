@@ -92,18 +92,35 @@ def run_anomaly_eval(flight_scores, labels_csv=None, events_csv=None,
     """
     label_source = load_anomaly_labels(labels_csv, events_csv)
 
+    # --- Alignment diagnostics ---
+    n_scores_before = len(flight_scores)
+    n_unique_score_ids = flight_scores['flight_id'].nunique()
+    n_dup_score_ids = n_scores_before - n_unique_score_ids
+    print(f"\n--- Alignment diagnostics ---")
+    print(f"  Flight scores received: {n_scores_before}")
+    print(f"  Unique flight IDs in scores: {n_unique_score_ids}")
+    if n_dup_score_ids > 0:
+        print(f"  WARNING: {n_dup_score_ids} duplicate flight IDs in scores!")
+
     if isinstance(label_source, set):
-        # events-based: membership = anomalous
+        n_label_ids = len(label_source)
         flight_scores['label'] = flight_scores['flight_id'].apply(
             lambda fid: 1 if fid in label_source else 0)
+        print(f"  Label source: events set with {n_label_ids} anomalous IDs")
     else:
-        # dict-based
+        n_label_ids = len(label_source)
         flight_scores['label'] = flight_scores['flight_id'].map(label_source)
         missing = flight_scores['label'].isna().sum()
         if missing > 0:
-            print(f"Warning: {missing} flights have no label and will be dropped")
+            print(f"  WARNING: {missing} flights have no label and will be dropped")
             flight_scores = flight_scores.dropna(subset=['label'])
         flight_scores['label'] = flight_scores['label'].astype(int)
+        print(f"  Label source: dict with {n_label_ids} entries")
+
+    n_after = len(flight_scores)
+    if n_after != n_scores_before:
+        print(f"  WARNING: {n_scores_before - n_after} flights dropped during label merge!")
+    print(f"  Final evaluation set: {n_after} flights")
 
     scores = flight_scores['anomaly_score'].values
     labels = flight_scores['label'].values
@@ -111,23 +128,65 @@ def run_anomaly_eval(flight_scores, labels_csv=None, events_csv=None,
     total = len(labels)
     n_pos = int(labels.sum())
     n_neg = total - n_pos
-    print(f"\nAnomaly evaluation: {total} flights, {n_pos} anomalous, {n_neg} normal")
+    prevalence = n_pos / total if total > 0 else 0
 
-    # ROC-AUC
+    print(f"\n--- Summary ---")
+    print(f"  Total flights: {total}")
+    print(f"  Anomalous (label=1): {n_pos}")
+    print(f"  Normal    (label=0): {n_neg}")
+    print(f"  Prevalence: {prevalence:.4f} ({prevalence:.1%})")
+
+    # --- Score distribution by class ---
+    anom_scores = scores[labels == 1]
+    norm_scores = scores[labels == 0]
+    print(f"\n--- Score distribution by class ---")
+    print(f"  Anomalous flights (label=1): min={anom_scores.min():.6f}  max={anom_scores.max():.6f}  mean={anom_scores.mean():.6f}  std={anom_scores.std():.6f}")
+    print(f"  Normal flights    (label=0): min={norm_scores.min():.6f}  max={norm_scores.max():.6f}  mean={norm_scores.mean():.6f}  std={norm_scores.std():.6f}")
+    mean_diff = anom_scores.mean() - norm_scores.mean()
+    print(f"  Mean(anomalous) - Mean(normal) = {mean_diff:.6f}  {'(anomalous higher, correct direction)' if mean_diff > 0 else '(NORMAL HIGHER -- score direction may be inverted!)'}")
+
+    # --- Top 20 and bottom 20 flights ---
+    sorted_df = flight_scores.sort_values('anomaly_score', ascending=False)
+    print(f"\n--- Top 20 flights by anomaly score (should be mostly anomalous) ---")
+    print(f"  {'rank':<6} {'flight_id':<12} {'anomaly_score':<18} {'label':<6}")
+    for rank, (_, row) in enumerate(sorted_df.head(20).iterrows(), 1):
+        marker = " <-- NORMAL" if row['label'] == 0 else ""
+        print(f"  {rank:<6} {int(row['flight_id']):<12} {row['anomaly_score']:<18.6f} {int(row['label']):<6}{marker}")
+
+    print(f"\n--- Bottom 20 flights by anomaly score (should be mostly normal) ---")
+    print(f"  {'rank':<6} {'flight_id':<12} {'anomaly_score':<18} {'label':<6}")
+    for rank, (_, row) in enumerate(sorted_df.tail(20).iterrows(), 1):
+        marker = " <-- ANOMALOUS" if row['label'] == 1 else ""
+        print(f"  {rank:<6} {int(row['flight_id']):<12} {row['anomaly_score']:<18.6f} {int(row['label']):<6}{marker}")
+
+    # --- ROC-AUC: both directions ---
     if n_pos == 0 or n_neg == 0:
-        print("Warning: Only one class present, ROC-AUC is undefined")
+        print("\nWarning: Only one class present, ROC-AUC is undefined")
         auc = None
+        auc_negated = None
     else:
         auc = roc_auc_score(labels, scores)
-        print(f"ROC-AUC: {auc:.4f}")
+        auc_negated = roc_auc_score(labels, -scores)
+        print(f"\n--- ROC-AUC ---")
+        print(f"  AUC (original scores, higher=more anomalous): {auc:.4f}")
+        print(f"  AUC (negated scores,  lower=more anomalous):  {auc_negated:.4f}")
+        if auc_negated > auc:
+            print(f"  ** Negated AUC is higher -- score direction is INVERTED! **")
+            print(f"  ** Using negated scores for top-k evaluation **")
+            scores = -scores
+            auc = auc_negated
+        else:
+            print(f"  Score direction is correct (original AUC >= negated AUC)")
 
-    # Top-k retrieval
+    # --- Top-k retrieval ---
     topk_results = compute_topk_metrics(scores, labels, ks)
 
-    print(f"\n{'k':<10} {'k_abs':<8} {'Prec@k':<10} {'Rec@k':<10} {'#True':<8} {'#Ret':<8}")
-    print("-" * 54)
+    print(f"\n--- Top-k retrieval metrics ---")
+    print(f"  {'k':<10} {'k_abs':<8} {'Prec@k':<10} {'Rec@k':<10} {'#True':<8} {'#Ret':<8} {'vs random':<10}")
+    print("  " + "-" * 64)
     for r in topk_results:
-        print(f"{r['k_pct']:<10} {r['k_abs']:<8} {r['precision']:<10.4f} {r['recall']:<10.4f} {r['num_true_in_topk']:<8} {r['num_retrieved']:<8}")
+        ratio = r['precision'] / prevalence if prevalence > 0 else 0
+        print(f"  {r['k_pct']:<10} {r['k_abs']:<8} {r['precision']:<10.4f} {r['recall']:<10.4f} {r['num_true_in_topk']:<8} {r['num_retrieved']:<8} {ratio:<10.2f}x")
 
     # Save results
     output = {
@@ -135,6 +194,13 @@ def run_anomaly_eval(flight_scores, labels_csv=None, events_csv=None,
         'total_flights': total,
         'total_anomalies': n_pos,
         'total_normal': n_neg,
+        'prevalence': prevalence,
+        'score_stats': {
+            'anomalous_mean': float(anom_scores.mean()),
+            'anomalous_std': float(anom_scores.std()),
+            'normal_mean': float(norm_scores.mean()),
+            'normal_std': float(norm_scores.std()),
+        },
         'topk_metrics': topk_results,
     }
     with open(output_path, 'w') as f:
@@ -230,10 +296,21 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
             mae = np.mean(np.abs(original_norm - recon_norm))
             mse = np.mean((original_norm - recon_norm) ** 2)
 
-            # Per-flight MSE: mean over (seq_len, feat_dim) for each sample
-            flight_mses = np.mean((original_norm - recon_norm) ** 2, axis=(1, 2))
-            per_flight_mse.extend(flight_mses.tolist())
-            per_flight_ids.extend(batch_ids.numpy().tolist())
+            # Per-flight anomaly score: MSE on MASKED positions only
+            # Mask convention: True/1 = keep (visible), False/0 = masked (predicted)
+            # Training loss uses (mask == 0) positions, so anomaly score must too.
+            # Using all positions dilutes the signal with trivially-reconstructed visible positions.
+            masks_np = np.stack(batch_masks, axis=0)  # (batch, seq_len, feat_dim)
+            sq_errors = (original_norm - recon_norm) ** 2
+            for i in range(len(batch_ids)):
+                masked_pos = ~masks_np[i]  # True where masked (predicted)
+                n_masked = masked_pos.sum()
+                if n_masked > 0:
+                    flight_mse = float(sq_errors[i][masked_pos].mean())
+                else:
+                    flight_mse = float(sq_errors[i].mean())
+                per_flight_mse.append(flight_mse)
+                per_flight_ids.append(int(batch_ids[i]))
 
             total_mae += mae
             total_mse += mse
@@ -244,7 +321,7 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
             recon_denorm = recon_norm * normalization_params['std'] + normalization_params['mean']
             all_orig.append(original_denorm)
             all_recon.append(recon_denorm)
-            all_masks.append(np.stack(batch_masks, axis=0))
+            all_masks.append(masks_np)
 
     avg_mae = total_mae / num_batches
     avg_mse = total_mse / num_batches
@@ -316,10 +393,18 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
             mae = np.mean(np.abs(original_norm - recon_norm))
             mse = np.mean((original_norm - recon_norm) ** 2)
 
-            # Per-flight MSE: mean over (seq_len, feat_dim) for each sample
-            flight_mses = np.mean((original_norm - recon_norm) ** 2, axis=(1, 2))
-            per_flight_mse.extend(flight_mses.tolist())
-            per_flight_ids.extend(batch_ids.numpy().tolist())
+            # Per-flight anomaly score: MSE on MASKED positions only
+            masks_np = np.stack(batch_masks, axis=0)
+            sq_errors = (original_norm - recon_norm) ** 2
+            for i in range(len(batch_ids)):
+                masked_pos = ~masks_np[i]
+                n_masked = masked_pos.sum()
+                if n_masked > 0:
+                    flight_mse = float(sq_errors[i][masked_pos].mean())
+                else:
+                    flight_mse = float(sq_errors[i].mean())
+                per_flight_mse.append(flight_mse)
+                per_flight_ids.append(int(batch_ids[i]))
 
             total_mae += mae
             total_mse += mse
@@ -330,7 +415,7 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
             recon_denorm = recon_norm * normalization_params['std'] + normalization_params['mean']
             all_orig.append(original_denorm)
             all_recon.append(recon_denorm)
-            all_masks.append(np.stack(batch_masks, axis=0))
+            all_masks.append(masks_np)
 
     avg_mae = total_mae / num_batches
     avg_mse = total_mse / num_batches

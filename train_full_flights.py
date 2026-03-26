@@ -67,7 +67,7 @@ def compute_normalization_parameters(data_dir: str, max_files: int = 100) -> Dic
     Returns:
         Dictionary containing 'mean' and 'std' arrays
     """
-    print("📊 Computing global normalization parameters...")
+    print(" Computing global normalization parameters...")
 
     # Find training data files
     data_path = Path(data_dir)
@@ -567,8 +567,8 @@ def main():
     # Setup device
     if torch.cuda.is_available():
         device = torch.device("cuda")
-        print(f"🔥 Using GPU: {torch.cuda.get_device_name()}")
-        print(f"   GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
+        print(f"Using GPU: {torch.cuda.get_device_name()}")
+        print(f" GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
         # A100/H100 optimizations
         torch.backends.cuda.matmul.allow_tf32 = True  # TF32 for faster matmuls
@@ -691,7 +691,7 @@ def main():
         exit(1)
 
     # Create memory-optimized model
-    print("🏗️  Creating memory-optimized model...")
+    print("  Creating memory-optimized model...")
     model = BertMaskedRegressor(
         feat_dim=feat_dim,
         hidden_size=hidden_size,
