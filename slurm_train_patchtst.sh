@@ -8,7 +8,7 @@
 #SBATCH --ntasks=1                               # Number of tasks
 #SBATCH --cpus-per-task=8                        # Number of CPU cores
 #SBATCH --mem=64G                                # Memory per node
-#SBATCH --gres=gpu:1                             # Request 1 GPU
+#SBATCH --gres=gpu:nvidia_rtx_a5000:1            # Request 1 A5000 GPU (24GB VRAM)
 
 # Optional: Email notifications (uncomment and add your email)
 # #SBATCH --mail-type=BEGIN,END,FAIL
