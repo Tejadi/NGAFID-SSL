@@ -282,6 +282,7 @@ def main():
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
+        shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True if torch.cuda.is_available() else False,
     )
@@ -339,8 +340,7 @@ def main():
         weight_decay=args.weight_decay,
     )
 
-    # Estimate total steps
-    total_steps = args.epochs * 1000
+    total_steps = args.epochs * len(train_loader)
     scheduler = create_lr_scheduler(optimizer, args.warmup_steps, total_steps)
 
     print("Starting training...")

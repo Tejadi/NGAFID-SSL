@@ -245,7 +245,49 @@ def load_bert_model(model_path, feat_dim, hidden_size, encoder_layers, decoder_l
     model.eval()
     return model
 
+def _compute_flight_anomaly_scores(sq_errors, masks_np, agg='mean'):
+    """Compute per-flight anomaly score from squared errors on masked positions.
+
+    Args:
+        sq_errors: (batch, seq_len, feat_dim) squared reconstruction errors
+        masks_np: (batch, seq_len, feat_dim) boolean mask (True=keep, False=masked)
+        agg: aggregation strategy:
+            'mean' - mean MSE across all masked positions
+            'max'  - max per-feature MSE, then take max across features
+            'per_feature_max' - per-feature mean MSE on masked positions, take max across features
+    Returns:
+        list of float anomaly scores, one per sample in the batch
+    """
+    scores = []
+    for i in range(sq_errors.shape[0]):
+        masked_pos = ~masks_np[i]  # True where masked (predicted)
+        if masked_pos.sum() == 0:
+            scores.append(float(sq_errors[i].mean()))
+            continue
+
+        if agg == 'mean':
+            scores.append(float(sq_errors[i][masked_pos].mean()))
+        elif agg == 'max':
+            scores.append(float(sq_errors[i][masked_pos].max()))
+        elif agg == 'per_feature_max':
+            # Per-feature: mean MSE across masked timesteps for each feature, then take max
+            feat_dim = sq_errors.shape[2]
+            feat_scores = []
+            for f in range(feat_dim):
+                feat_mask = masked_pos[:, f]  # (seq_len,)
+                if feat_mask.sum() > 0:
+                    feat_scores.append(float(sq_errors[i, :, f][feat_mask].mean()))
+            if feat_scores:
+                scores.append(max(feat_scores))
+            else:
+                scores.append(float(sq_errors[i].mean()))
+        else:
+            raise ValueError(f"Unknown aggregation: {agg}")
+    return scores
+
+
 def evaluate_model(model, test_data, flight_ids, normalization_params, batch_size=32, masking_ratio=0.5, mean_mask_length=60,
+                  num_mask_samples=1, anomaly_agg='mean',
                   device="cuda" if torch.cuda.is_available() else "cpu"):
 
     model.eval()
@@ -261,67 +303,74 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
     all_orig = []
     all_recon = []
     all_masks = []
-    per_flight_mse = []
-    per_flight_ids = []
 
-    with torch.no_grad():
-        for data, batch_ids in tqdm(test_loader, desc="Evaluating", unit="batch"):
-            data = data.to(device)
+    # Accumulate scores across mask samples: flight_id -> list of scores
+    from collections import defaultdict
+    flight_score_accum = defaultdict(list)
 
-            original_data = data.cpu().numpy()
-            masked_batch = []
-            batch_masks = []
-            for sequence, flight_id in zip(original_data, batch_ids):
-                _, masked_sequence, mask = mask_transform(
-                    sequence,
-                    masking_ratio=masking_ratio,
-                    mean_mask_length=mean_mask_length,
-                    mode='separate',
-                    distribution='geometric',
-                    random_seed=int(flight_id)
-                )
-                masked_sequence = masked_sequence.numpy()
-                masked_batch.append(masked_sequence)
-                batch_masks.append(mask.numpy())
+    for mask_sample_idx in range(num_mask_samples):
+        if num_mask_samples > 1:
+            print(f"  Mask sample {mask_sample_idx + 1}/{num_mask_samples}")
 
-            masked_data = np.stack(masked_batch, axis=0)
-            masked_data = torch.FloatTensor(masked_data).to(device)
+        with torch.no_grad():
+            for data, batch_ids in tqdm(test_loader, desc="Evaluating", unit="batch",
+                                        disable=(num_mask_samples > 1 and mask_sample_idx > 0)):
+                data = data.to(device)
 
-            reconstructed = model(masked_data)
+                original_data = data.cpu().numpy()
+                masked_batch = []
+                batch_masks = []
+                for sequence, flight_id in zip(original_data, batch_ids):
+                    # For multi-sample: use different random seeds per sample
+                    if num_mask_samples == 1:
+                        seed = int(flight_id)
+                    else:
+                        seed = int(flight_id) * 1000 + mask_sample_idx
+                    _, masked_sequence, mask = mask_transform(
+                        sequence,
+                        masking_ratio=masking_ratio,
+                        mean_mask_length=mean_mask_length,
+                        mode='separate',
+                        distribution='geometric',
+                        random_seed=seed
+                    )
+                    masked_sequence = masked_sequence.numpy()
+                    masked_batch.append(masked_sequence)
+                    batch_masks.append(mask.numpy())
 
-            # Compute metrics on normalized values (as per experiment description)
-            original_norm = data.cpu().numpy()
-            recon_norm = reconstructed.cpu().numpy()
+                masked_data = np.stack(masked_batch, axis=0)
+                masked_data = torch.FloatTensor(masked_data).to(device)
 
-            mae = np.mean(np.abs(original_norm - recon_norm))
-            mse = np.mean((original_norm - recon_norm) ** 2)
+                reconstructed = model(masked_data)
 
-            # Per-flight anomaly score: MSE on MASKED positions only
-            # Mask convention: True/1 = keep (visible), False/0 = masked (predicted)
-            # Training loss uses (mask == 0) positions, so anomaly score must too.
-            # Using all positions dilutes the signal with trivially-reconstructed visible positions.
-            masks_np = np.stack(batch_masks, axis=0)  # (batch, seq_len, feat_dim)
-            sq_errors = (original_norm - recon_norm) ** 2
-            for i in range(len(batch_ids)):
-                masked_pos = ~masks_np[i]  # True where masked (predicted)
-                n_masked = masked_pos.sum()
-                if n_masked > 0:
-                    flight_mse = float(sq_errors[i][masked_pos].mean())
-                else:
-                    flight_mse = float(sq_errors[i].mean())
-                per_flight_mse.append(flight_mse)
-                per_flight_ids.append(int(batch_ids[i]))
+                original_norm = data.cpu().numpy()
+                recon_norm = reconstructed.cpu().numpy()
+                masks_np = np.stack(batch_masks, axis=0)
 
-            total_mae += mae
-            total_mse += mse
-            num_batches += 1
+                # Only accumulate overall metrics on first mask sample
+                if mask_sample_idx == 0:
+                    mae = np.mean(np.abs(original_norm - recon_norm))
+                    mse = np.mean((original_norm - recon_norm) ** 2)
+                    total_mae += mae
+                    total_mse += mse
+                    num_batches += 1
+                    original_denorm = original_norm * normalization_params['std'] + normalization_params['mean']
+                    recon_denorm = recon_norm * normalization_params['std'] + normalization_params['mean']
+                    all_orig.append(original_denorm)
+                    all_recon.append(recon_denorm)
+                    all_masks.append(masks_np)
 
-            # Denormalize for visualization only
-            original_denorm = original_norm * normalization_params['std'] + normalization_params['mean']
-            recon_denorm = recon_norm * normalization_params['std'] + normalization_params['mean']
-            all_orig.append(original_denorm)
-            all_recon.append(recon_denorm)
-            all_masks.append(masks_np)
+                # Per-flight anomaly scores on masked positions
+                sq_errors = (original_norm - recon_norm) ** 2
+                sample_scores = _compute_flight_anomaly_scores(sq_errors, masks_np, agg=anomaly_agg)
+                for i, fid in enumerate(batch_ids.numpy().tolist()):
+                    flight_score_accum[int(fid)].append(sample_scores[i])
+
+    # Average scores across mask samples
+    per_flight_ids = sorted(flight_score_accum.keys(), key=lambda fid: list(flight_score_accum.keys()).index(fid))
+    # Preserve insertion order (matches data order)
+    per_flight_ids = list(flight_score_accum.keys())
+    per_flight_mse = [np.mean(flight_score_accum[fid]) for fid in per_flight_ids]
 
     avg_mae = total_mae / num_batches
     avg_mse = total_mse / num_batches
@@ -338,10 +387,14 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
         'anomaly_score': per_flight_mse
     })
 
+    if num_mask_samples > 1:
+        print(f"  Averaged anomaly scores over {num_mask_samples} mask samples")
+
     return metrics, np.concatenate(all_orig), np.concatenate(all_recon), np.concatenate(all_masks), flight_scores
 
 def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map, normalization_params, batch_size=32,
-                            mask_length=10, start_point=0.5, device="cuda" if torch.cuda.is_available() else "cpu"):
+                            mask_length=10, start_point=0.5, anomaly_agg='mean',
+                            device="cuda" if torch.cuda.is_available() else "cpu"):
     model.eval()
 
     test_data_normalized = (test_data - normalization_params['mean']) / normalization_params['std']
@@ -386,31 +439,23 @@ def evaluate_sequential_model(model, test_data, flight_ids, sequence_length_map,
 
             reconstructed = model(masked_data)
 
-            # Compute metrics on normalized values (as per experiment description)
             original_norm = data.cpu().numpy()
             recon_norm = reconstructed.cpu().numpy()
 
             mae = np.mean(np.abs(original_norm - recon_norm))
             mse = np.mean((original_norm - recon_norm) ** 2)
 
-            # Per-flight anomaly score: MSE on MASKED positions only
             masks_np = np.stack(batch_masks, axis=0)
             sq_errors = (original_norm - recon_norm) ** 2
-            for i in range(len(batch_ids)):
-                masked_pos = ~masks_np[i]
-                n_masked = masked_pos.sum()
-                if n_masked > 0:
-                    flight_mse = float(sq_errors[i][masked_pos].mean())
-                else:
-                    flight_mse = float(sq_errors[i].mean())
-                per_flight_mse.append(flight_mse)
-                per_flight_ids.append(int(batch_ids[i]))
+            sample_scores = _compute_flight_anomaly_scores(sq_errors, masks_np, agg=anomaly_agg)
+            for i, fid in enumerate(batch_ids.numpy().tolist()):
+                per_flight_mse.append(sample_scores[i])
+                per_flight_ids.append(int(fid))
 
             total_mae += mae
             total_mse += mse
             num_batches += 1
 
-            # Denormalize for visualization only
             original_denorm = original_norm * normalization_params['std'] + normalization_params['mean']
             recon_denorm = recon_norm * normalization_params['std'] + normalization_params['mean']
             all_orig.append(original_denorm)
