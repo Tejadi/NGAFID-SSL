@@ -39,7 +39,7 @@ mkdir -p logs
 
 # Activate conda environment
 source ~/.bashrc
-conda activate bert-flight
+conda activate ngafid
 
 pip install wandb --quiet
 
