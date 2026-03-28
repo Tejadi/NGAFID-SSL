@@ -39,7 +39,7 @@ mkdir -p logs
 
 # Activate conda environment
 source ~/.bashrc
-conda activate ngafid
+conda activate torch-gpu-12
 
 pip install wandb --quiet
 
