@@ -70,7 +70,7 @@ python train_patchtst_masked_regressor.py \
     --seq_len 1024 \
     --patch_len 16 \
     --stride 8 \
-    --batch_size 32 \
+    --batch_size 16 \
     --epochs 18 \
     --learning_rate 1e-4 \
     --d_model 512 \
