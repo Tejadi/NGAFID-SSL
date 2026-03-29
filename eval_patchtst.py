@@ -99,8 +99,14 @@ def main():
         pin_memory=torch.cuda.is_available(),
     )
 
-    total_mse = 0.0
-    total_mae = 0.0
+    # For denormalization
+    mean = torch.tensor(normalization_params['mean'], dtype=torch.float32, device=device)
+    std = torch.tensor(normalization_params['std'], dtype=torch.float32, device=device)
+
+    total_mse_norm = 0.0
+    total_mae_norm = 0.0
+    total_mse_orig = 0.0
+    total_mae_orig = 0.0
     total_masked = 0
     total_samples = 0
 
@@ -115,31 +121,55 @@ def main():
             masked_positions = (mask == 0).float()
             n_masked = masked_positions.sum().item()
 
-            mse = ((reconstructed - x_original) ** 2 * masked_positions).sum().item()
-            mae = (torch.abs(reconstructed - x_original) * masked_positions).sum().item()
+            # Normalized space metrics
+            total_mse_norm += ((reconstructed - x_original) ** 2 * masked_positions).sum().item()
+            total_mae_norm += (torch.abs(reconstructed - x_original) * masked_positions).sum().item()
 
-            total_mse += mse
-            total_mae += mae
+            # Denormalize and compute in original scale
+            recon_orig = reconstructed * std + mean
+            x_orig_scale = x_original * std + mean
+            total_mse_orig += ((recon_orig - x_orig_scale) ** 2 * masked_positions).sum().item()
+            total_mae_orig += (torch.abs(recon_orig - x_orig_scale) * masked_positions).sum().item()
+
             total_masked += n_masked
             total_samples += x_masked.size(0)
 
-    avg_mse = total_mse / total_masked if total_masked > 0 else float('inf')
-    avg_mae = total_mae / total_masked if total_masked > 0 else float('inf')
+    n = total_masked if total_masked > 0 else float('inf')
+    avg_mse_norm = total_mse_norm / n
+    avg_mae_norm = total_mae_norm / n
+    avg_rmse_norm = avg_mse_norm ** 0.5
+    avg_mse_orig = total_mse_orig / n
+    avg_mae_orig = total_mae_orig / n
+    avg_rmse_orig = avg_mse_orig ** 0.5
 
     print("\n=== Test Set Results ===")
-    print(f"Samples evaluated : {total_samples}")
-    print(f"Masked positions  : {int(total_masked)}")
-    print(f"MSE (per position): {avg_mse:.6f}")
-    print(f"MAE (per position): {avg_mae:.6f}")
+    print(f"Samples evaluated     : {total_samples}")
+    print(f"Masked positions      : {int(total_masked)}")
+    print(f"--- Normalized space (z-scored) ---")
+    print(f"MSE  : {avg_mse_norm:.6f}")
+    print(f"RMSE : {avg_rmse_norm:.6f}")
+    print(f"MAE  : {avg_mae_norm:.6f}")
+    print(f"--- Original scale (sensor units) ---")
+    print(f"MSE  : {avg_mse_orig:.6f}")
+    print(f"RMSE : {avg_rmse_orig:.6f}")
+    print(f"MAE  : {avg_mae_orig:.6f}")
 
     results = {
         "checkpoint": args.checkpoint,
         "samples": total_samples,
         "masked_positions": int(total_masked),
-        "mse_per_position": avg_mse,
-        "mae_per_position": avg_mae,
         "masking_ratio": args.masking_ratio,
         "mean_mask_length": args.mean_mask_length,
+        "normalized": {
+            "mse": avg_mse_norm,
+            "rmse": avg_rmse_norm,
+            "mae": avg_mae_norm,
+        },
+        "original_scale": {
+            "mse": avg_mse_orig,
+            "rmse": avg_rmse_orig,
+            "mae": avg_mae_orig,
+        },
     }
 
     out_path = os.path.join(os.path.dirname(args.checkpoint), "eval_test_results.json")
