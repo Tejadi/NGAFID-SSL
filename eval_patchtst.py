@@ -66,26 +66,38 @@ def load_model(checkpoint_path, device):
 
 
 def load_test_flights(data_dir, seq_len, train_split, val_split, max_files, seed=0):
-    """Load test split CSV files and return fixed-length windows."""
+    """Load test split CSV files and return fixed-length windows.
+    Mirrors LocalFlightDataset._find_csv_files / _split_files logic exactly."""
     import pandas as pd
 
     data_path = Path(data_dir)
-    all_files = sorted([
-        f for f in data_path.glob("*.csv")
-        if not any(name in f.name.lower()
-                   for name in ['aircraft_types', 'events', 'flight_ids', 'splits', 'sequence_length'])
-    ])
 
-    np.random.seed(seed)
-    indices = np.random.permutation(len(all_files))
-    n_train = int(len(all_files) * train_split)
-    n_val = int(len(all_files) * val_split)
-    test_files = [all_files[i] for i in indices[n_train + n_val:]]
-
-    if max_files is not None:
-        test_files = test_files[:max_files]
-
-    print(f"Loading {len(test_files)} test files...")
+    # Mirror LocalFlightDataset: prefer preprocessed_data/test/ directory
+    preprocessed_path = data_path / "preprocessed_data"
+    if preprocessed_path.exists():
+        test_path = preprocessed_path / "test"
+        if test_path.exists():
+            test_files = sorted(test_path.glob("*.csv"))
+            if max_files is not None:
+                test_files = test_files[:max_files]
+            print(f"Loading {len(test_files)} test files from {test_path}...")
+        else:
+            test_files = []
+    else:
+        # Fallback: manual split on flat directory
+        all_files = sorted([
+            f for f in data_path.glob("*.csv")
+            if not any(name in f.name.lower()
+                       for name in ['aircraft_types', 'events', 'flight_ids', 'splits', 'sequence_length'])
+        ])
+        np.random.seed(seed)
+        indices = np.random.permutation(len(all_files))
+        n_train = int(len(all_files) * train_split)
+        n_val = int(len(all_files) * val_split)
+        test_files = [all_files[i] for i in indices[n_train + n_val:]]
+        if max_files is not None:
+            test_files = test_files[:max_files]
+        print(f"Loading {len(test_files)} test files...")
 
     windows = []
     for f in tqdm(test_files, desc="Loading test data"):
