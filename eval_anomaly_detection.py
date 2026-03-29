@@ -485,12 +485,54 @@ def create_ground_truth_labels(
     return labels
 
 
+def compute_topk_recall(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    k_percents: List[float] = [1.0, 5.0, 10.0]
+) -> Dict[str, float]:
+    """
+    Compute Top-k% recall for anomaly detection.
+
+    For each k, take the top k% of timesteps by anomaly score and compute
+    what fraction of all true anomaly timesteps are captured.
+
+    Args:
+        scores: Anomaly scores (higher = more anomalous), shape (N,)
+        labels: Binary ground truth labels (1 = anomaly), shape (N,)
+        k_percents: List of k values (as percentages of total timesteps)
+
+    Returns:
+        Dictionary mapping 'top_k{k}_recall' -> recall value
+    """
+    results = {}
+    n_total = len(scores)
+    n_anomalies = int(labels.sum())
+
+    if n_anomalies == 0:
+        for k in k_percents:
+            results[f'top_k{int(k)}_recall'] = float('nan')
+        return results
+
+    # Sort indices by score descending (highest anomaly score first)
+    sorted_indices = np.argsort(scores)[::-1]
+
+    for k in k_percents:
+        n_top = max(1, int(np.ceil(n_total * k / 100.0)))
+        top_indices = sorted_indices[:n_top]
+        n_captured = int(labels[top_indices].sum())
+        recall_at_k = n_captured / n_anomalies
+        results[f'top_k{int(k)}_recall'] = float(recall_at_k)
+
+    return results
+
+
 def evaluate_anomaly_detection(
     reconstruction_errors: List[np.ndarray],
     ground_truth_labels: List[np.ndarray],
-    threshold_percentile: float = 95
+    threshold_percentile: float = 95,
+    topk_percents: List[float] = [1.0, 5.0, 10.0]
 ) -> Dict[str, float]:
-    """Compute anomaly detection metrics."""
+    """Compute anomaly detection metrics including PR-AUC and Top-k recall."""
 
     # Concatenate all errors and labels
     all_errors = np.concatenate(reconstruction_errors)
@@ -499,14 +541,23 @@ def evaluate_anomaly_detection(
     # Compute metrics
     results = {}
 
-    # ROC-AUC (threshold-free)
+    # ROC-AUC and PR-AUC (threshold-free ranking metrics)
     if len(np.unique(all_labels)) > 1:
         results['roc_auc'] = roc_auc_score(all_labels, all_errors)
-        results['avg_precision'] = average_precision_score(all_labels, all_errors)
+        # PR-AUC: area under the precision-recall curve
+        # average_precision_score computes the interpolated AUPRC
+        results['pr_auc'] = average_precision_score(all_labels, all_errors)
+        # Keep avg_precision as an alias for backwards compatibility
+        results['avg_precision'] = results['pr_auc']
     else:
         print("Warning: Only one class in labels, cannot compute AUC")
         results['roc_auc'] = float('nan')
+        results['pr_auc'] = float('nan')
         results['avg_precision'] = float('nan')
+
+    # Top-k recall: fraction of anomalies captured in top-k% of ranked timesteps
+    topk_results = compute_topk_recall(all_errors, all_labels, k_percents=topk_percents)
+    results.update(topk_results)
 
     # Threshold-based metrics
     threshold = np.percentile(all_errors, threshold_percentile)
@@ -573,6 +624,8 @@ def main():
                         help='Percentile threshold for anomaly detection')
     parser.add_argument('--max_files', type=int, default=None,
                         help='Maximum number of files to evaluate')
+    parser.add_argument('--topk_percents', type=float, nargs='+', default=[1.0, 5.0, 10.0],
+                        help='Top-k%% values for recall computation (e.g. 1.0 5.0 10.0)')
 
     # Evaluation parameters
     parser.add_argument('--batch_size', type=int, default=32,
@@ -758,7 +811,8 @@ def main():
     metrics = evaluate_anomaly_detection(
         all_reconstruction_errors,
         all_ground_truth,
-        threshold_percentile=args.threshold_percentile
+        threshold_percentile=args.threshold_percentile,
+        topk_percents=args.topk_percents
     )
 
     # Print results
@@ -771,7 +825,12 @@ def main():
     print(f"Num mask samples: {args.num_mask_samples}")
     print("-" * 60)
     print(f"ROC-AUC:           {metrics['roc_auc']:.6f}")
-    print(f"Average Precision: {metrics['avg_precision']:.6f}")
+    print(f"PR-AUC (Avg Prec): {metrics['pr_auc']:.6f}")
+    print("-" * 60)
+    for k in args.topk_percents:
+        key = f'top_k{int(k)}_recall'
+        val = metrics.get(key, float('nan'))
+        print(f"Top-{int(k)}% Recall:     {val:.6f}  (top {int(k)}% highest-scored timesteps capture this fraction of anomalies)")
     print("-" * 60)
     print(f"Precision:         {metrics['precision']:.6f}")
     print(f"Recall:            {metrics['recall']:.6f}")
@@ -850,11 +909,14 @@ def main():
 
         if type_errors and sum(np.concatenate(type_labels)) > 0:
             type_results = evaluate_anomaly_detection(
-                type_errors, type_labels, args.threshold_percentile
+                type_errors, type_labels,
+                threshold_percentile=args.threshold_percentile,
+                topk_percents=args.topk_percents
             )
             per_event_results[event_type] = type_results
-            print(f"{event_type:40s} AUC: {type_results['roc_auc']:.4f}, "
-                  f"AP: {type_results['avg_precision']:.4f}, "
+            print(f"{event_type:40s} ROC-AUC: {type_results['roc_auc']:.4f}, "
+                  f"PR-AUC: {type_results['pr_auc']:.4f}, "
+                  f"Top1%R: {type_results.get('top_k1_recall', float('nan')):.4f}, "
                   f"Events: {type_results['anomaly_timesteps']:,}")
 
     # Save per-event results
