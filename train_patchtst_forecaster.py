@@ -81,6 +81,10 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="./patchtst_forecaster_runs")
     parser.add_argument("--job_name", type=str, default=None)
 
+    # Resume
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint to resume training from")
+
     # W&B
     parser.add_argument("--wandb_project", type=str, default="patchtst-flight-forecaster")
     parser.add_argument("--wandb_entity", type=str, default=None)
@@ -261,8 +265,22 @@ def main():
     print("Starting training...")
     global_step = 0
     best_eval_loss = float('inf')
+    start_epoch = 0
 
-    for epoch in range(args.epochs):
+    if args.resume and os.path.exists(args.resume):
+        print(f"Resuming from checkpoint: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device)
+        model.load_state_dict(ckpt['model_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+        global_step = ckpt['global_step']
+        best_eval_loss = ckpt.get('eval_loss', float('inf'))
+        # Infer epoch from global_step
+        steps_per_epoch = max(1, len(train_loader))
+        start_epoch = global_step // steps_per_epoch
+        print(f"  Resumed at global_step={global_step}, starting from epoch {start_epoch+1}")
+
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         epoch_loss = 0.0
         epoch_mse = 0.0

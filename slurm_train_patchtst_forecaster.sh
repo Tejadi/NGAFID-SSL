@@ -37,7 +37,7 @@ python train_patchtst_forecaster.py \
     --patch_len 16 \
     --stride 8 \
     --batch_size 16 \
-    --epochs 18 \
+    --epochs 50 \
     --learning_rate 1e-4 \
     --d_model 512 \
     --n_heads 8 \
@@ -52,6 +52,7 @@ python train_patchtst_forecaster.py \
     --num_workers 4 \
     --forecast_ratios 0.1 0.2 0.3 \
     --min_forecast_horizon 50 \
+    --resume ./patchtst_forecaster_runs/patchtst_forecaster_20260329_103811/best_model.pt \
     --wandb_project "patchtst-flight-forecaster" \
     --wandb_run_name "$JOB_NAME"
 
