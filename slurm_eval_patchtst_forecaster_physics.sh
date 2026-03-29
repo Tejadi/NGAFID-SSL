@@ -23,7 +23,7 @@ python eval_forecasting.py \
     --model_type patchtst \
     --checkpoint patchtst_forecaster_runs/patchtst_forecaster_20260329_123124/best_model.pt \
     --data_dir ./NGAFID-LOCI-GATS-Data/preprocessed_data/test \
-    --train_data_dir ./NGAFID-LOCI-GATS-Data \
+    --train_data_dir ./NGAFID-LOCI-GATS-Data/preprocessed_data/train \
     --forecast_ratio 0.2 \
     --batch_size 16 \
     --physics_eval \
