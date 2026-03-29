@@ -18,8 +18,8 @@ from train_full_flights import compute_normalization_parameters
 from ngafid_datasets.transformation_dataset import mask_transform
 
 
-EVAL_MASKING_RATIOS = [0.2, 0.5, 0.8]
-MEAN_MASK_LENGTH = 3
+MASKING_RATIO = 0.6
+EVAL_MEAN_MASK_LENGTHS = [5, 60]
 
 
 def parse_args():
@@ -113,8 +113,8 @@ def load_test_flights(data_dir, seq_len, train_split, val_split, max_files, seed
     return np.stack(windows)  # (N, seq_len, feat_dim)
 
 
-def evaluate_at_ratio(model, data_normalized, mean, std, masking_ratio, device, batch_size):
-    """Evaluate model at a single masking ratio. Matches BERT eval protocol exactly."""
+def evaluate_at_mask_length(model, data_normalized, mean, std, mean_mask_length, device, batch_size):
+    """Evaluate model at a single mean_mask_length with fixed ratio=0.6. Matches BERT eval protocol."""
     total_mse_norm = 0.0
     total_mae_norm = 0.0
     total_mse_orig = 0.0
@@ -125,16 +125,16 @@ def evaluate_at_ratio(model, data_normalized, mean, std, masking_ratio, device, 
     std_t = torch.tensor(std, dtype=torch.float32, device=device)
 
     n = len(data_normalized)
-    for i in tqdm(range(0, n, batch_size), desc=f"  ratio={masking_ratio}"):
-        batch = data_normalized[i:i + batch_size]  # (B, seq_len, feat_dim)
+    for i in tqdm(range(0, n, batch_size), desc=f"  mask_len={mean_mask_length}"):
+        batch = data_normalized[i:i + batch_size]
 
         masked_batch = []
         mask_batch = []
         for j, seq in enumerate(batch):
             _, masked_seq, mask = mask_transform(
                 seq,
-                masking_ratio=masking_ratio,
-                mean_mask_length=MEAN_MASK_LENGTH,
+                masking_ratio=MASKING_RATIO,
+                mean_mask_length=mean_mask_length,
                 mode='separate',
                 distribution='geometric',
                 random_seed=i + j,
@@ -149,7 +149,6 @@ def evaluate_at_ratio(model, data_normalized, mean, std, masking_ratio, device, 
         with torch.no_grad():
             reconstructed = model(x_masked)
 
-        # mask==0 are the masked positions (same convention as BERT eval)
         masked_pos = (masks == 0).float()
         n_masked = masked_pos.sum().item()
 
@@ -165,8 +164,8 @@ def evaluate_at_ratio(model, data_normalized, mean, std, masking_ratio, device, 
 
     denom = total_masked if total_masked > 0 else float('inf')
     return {
-        "masking_ratio": masking_ratio,
-        "mean_mask_length": MEAN_MASK_LENGTH,
+        "masking_ratio": MASKING_RATIO,
+        "mean_mask_length": mean_mask_length,
         "masked_positions": int(total_masked),
         "normalized": {
             "mse": total_mse_norm / denom,
@@ -205,9 +204,9 @@ def main():
     data_normalized = (raw_data - mean) / std
 
     all_results = []
-    for ratio in EVAL_MASKING_RATIOS:
-        print(f"\nEvaluating masking_ratio={ratio}...")
-        result = evaluate_at_ratio(model, data_normalized, mean, std, ratio, device, args.batch_size)
+    for mask_len in EVAL_MEAN_MASK_LENGTHS:
+        print(f"\nEvaluating masking_ratio={MASKING_RATIO}, mean_mask_length={mask_len}...")
+        result = evaluate_at_mask_length(model, data_normalized, mean, std, mask_len, device, args.batch_size)
         all_results.append(result)
 
         print(f"  Normalized  — MSE: {result['normalized']['mse']:.6f}  "
@@ -217,10 +216,10 @@ def main():
               f"RMSE: {result['original_scale']['rmse']:.6f}  "
               f"MAE: {result['original_scale']['mae']:.6f}")
 
-    print("\n=== Summary ===")
-    print(f"{'Ratio':<8} {'Norm MSE':<14} {'Norm MAE':<14} {'Orig MSE':<14} {'Orig MAE'}")
+    print("\n=== Summary (masking_ratio=0.6) ===")
+    print(f"{'MaskLen':<10} {'Norm MSE':<14} {'Norm MAE':<14} {'Orig MSE':<14} {'Orig MAE'}")
     for r in all_results:
-        print(f"{r['masking_ratio']:<8} "
+        print(f"{r['mean_mask_length']:<10} "
               f"{r['normalized']['mse']:<14.6f} "
               f"{r['normalized']['mae']:<14.6f} "
               f"{r['original_scale']['mse']:<14.6f} "
@@ -229,7 +228,8 @@ def main():
     output = {
         "checkpoint": args.checkpoint,
         "total_test_windows": len(raw_data),
-        "results_by_masking_ratio": all_results,
+        "masking_ratio": MASKING_RATIO,
+        "results_by_mean_mask_length": all_results,
     }
 
     out_path = os.path.join(os.path.dirname(args.checkpoint), "eval_test_results.json")
