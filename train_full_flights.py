@@ -487,6 +487,8 @@ def main():
                         help="Path to data directory (parent of preprocessed_data/)")
     parser.add_argument("--checkpoint_dir", type=str, default=None,
                         help="Directory to save model checkpoints (default: ./checkpoints/bert_models_<timestamp>)")
+    parser.add_argument("--resume_from", type=str, default=None,
+                        help="Path to a checkpoint to resume training from")
 
     # Data filtering arguments
     parser.add_argument("--aircraft_type", type=str, nargs='+', default=None,
@@ -756,6 +758,23 @@ def main():
     # Setup mixed precision training
     scaler = torch.cuda.amp.GradScaler() if use_mixed_precision else None
 
+    # Optionally resume from a checkpoint
+    start_epoch = 0
+    global_step = 0
+    best_eval_loss = float('inf')
+    if args.resume_from is not None:
+        print(f"🔁 Resuming from checkpoint: {args.resume_from}")
+        checkpoint = torch.load(args.resume_from, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        if "scheduler_state_dict" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        start_epoch = int(checkpoint.get("epoch", 0))
+        global_step = int(checkpoint.get("global_step", 0))
+        best_eval_loss = float(checkpoint.get("best_eval_loss", best_eval_loss))
+        print(f"   start_epoch={start_epoch}, global_step={global_step}, best_eval_loss={best_eval_loss:.4f}")
+
     print(f"📈 Memory-optimized training setup:")
     print(f"   Batch size: {batch_size}")
     print(f"   Gradient accumulation steps: {gradient_accumulation_steps}")
@@ -843,13 +862,11 @@ def main():
 
     # Training loop
     print("🎯 Starting training...")
-    global_step = 0
-    best_eval_loss = float('inf')
 
     # Epochs to save models at (every 5 epochs)
     save_epochs = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
         epoch_mse_loss = 0.0
