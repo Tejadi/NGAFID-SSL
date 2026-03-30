@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import random
 
+DERVIED_COLS = ['stallindex', 'aoasimple', 'densityratio', 'trueairspeed(ft/min)', 'vspdcalculated']
+
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
     if is_best:
@@ -67,6 +69,7 @@ def load_flight_data(flight_dir):
         flight_ids.append(flight_id)
         
         flight = pd.read_csv(path)
+
         flight_array = flight.values
         flights.append(flight_array)
     

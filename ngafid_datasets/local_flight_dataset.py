@@ -14,6 +14,7 @@ import glob
 import os
 from .masked_flight_dataset import noise_mask
 
+DERVIED_COLS = ['stallindex', 'aoasimple', 'densityratio', 'trueairspeed(ft/min)', 'vspdcalculated']
 
 class LocalFlightDataset(IterableDataset):
     """
@@ -209,6 +210,7 @@ class LocalFlightDataset(IterableDataset):
             try:
                 # Read CSV file
                 df = pd.read_csv(csv_file, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
+                df = df.drop(columns=DERVIED_COLS)
 
                 # Select only numeric columns
                 numeric_cols = df.select_dtypes(include=[np.number]).columns
@@ -349,6 +351,7 @@ def get_feature_dim_from_local_data(data_dir: str) -> Optional[int]:
     for csv_file in csv_files[:5]:
         try:
             df = pd.read_csv(csv_file, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
+            df = df.drop(columns=DERVIED_COLS)
 
             # Skip files that look like metadata (very few rows)
             if len(df) < 10:

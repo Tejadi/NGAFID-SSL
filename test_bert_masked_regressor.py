@@ -280,7 +280,6 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
                     distribution='geometric',
                     random_seed=int(flight_id)
                 )
-                masked_sequence = masked_sequence.numpy()
                 masked_batch.append(masked_sequence)
                 batch_masks.append(mask.numpy())
 

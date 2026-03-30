@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple, Iterator, Dict
 import os
 
+DERVIED_COLS = ['stallindex', 'aoasimple', 'densityratio', 'trueairspeed(ft/min)', 'vspdcalculated']
 
 class ForecastFlightDataset(IterableDataset):
     """
@@ -302,6 +303,7 @@ class ForecastFlightDataset(IterableDataset):
             try:
                 # Read CSV file
                 df = pd.read_csv(csv_file, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
+                df = df.drop(columns=DERVIED_COLS)
 
                 # Select only numeric columns
                 numeric_cols = df.select_dtypes(include=[np.number]).columns

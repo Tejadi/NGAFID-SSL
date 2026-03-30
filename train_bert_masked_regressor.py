@@ -44,7 +44,6 @@ except ImportError as e:
     print("Make sure you're running from the project root directory")
     exit(1)
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Train BERT Masked Regressor for Flight Data")
 
