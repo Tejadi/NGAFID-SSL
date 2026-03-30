@@ -765,7 +765,16 @@ def main():
     if args.resume_from is not None:
         print(f"🔁 Resuming from checkpoint: {args.resume_from}")
         checkpoint = torch.load(args.resume_from, map_location=device)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        state_dict = checkpoint["model_state_dict"]
+        if any(k.startswith("_orig_mod.") for k in state_dict.keys()):
+            state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+        if any(k.startswith("module.") for k in state_dict.keys()):
+            state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        if missing_keys:
+            print(f"⚠️  Missing keys when loading checkpoint: {missing_keys}")
+        if unexpected_keys:
+            print(f"⚠️  Unexpected keys in checkpoint: {unexpected_keys}")
         if "optimizer_state_dict" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         if "scheduler_state_dict" in checkpoint:
