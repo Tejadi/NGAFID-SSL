@@ -606,7 +606,7 @@ def main():
 
     # Required arguments
     parser.add_argument('--model_type', type=str, required=True,
-                        choices=['bert', 'lstm', 'mlp'],
+                        choices=['bert', 'lstm', 'mlp', 'patchtst'],
                         help='Type of model to evaluate')
     parser.add_argument('--checkpoint', type=str, required=True,
                         help='Path to model checkpoint')
