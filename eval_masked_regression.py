@@ -28,6 +28,7 @@ from ngafid_datasets.transformation_dataset import mask_transform
 from models.bert_masked_regressor import BertMaskedRegressor
 from models.lstm_baseline import LSTMBaseline
 from models.mlp_baseline import MLPBaseline
+from models.patchtst_masked_regressor import PatchTSTMaskedRegressor
 
 # Physics evaluation imports
 from physics_loss import (
@@ -264,12 +265,38 @@ def load_mlp_model(checkpoint_path, feat_dim, device):
     }
 
 
+def load_patchtst_model(checkpoint_path, feat_dim, device):
+    """Load PatchTST masked regressor model."""
+    checkpoint = torch.load(checkpoint_path, map_location=device, mmap=True)
+    a = checkpoint['args']
+
+    model = PatchTSTMaskedRegressor(
+        feat_dim=a['feat_dim'],
+        seq_len=a['seq_len'],
+        patch_len=a['patch_len'],
+        stride=a['stride'],
+        d_model=a['d_model'],
+        n_heads=a['n_heads'],
+        d_ff=a['d_ff'],
+        encoder_layers=a['encoder_layers'],
+        decoder_layers=a['decoder_layers'],
+        dropout=0.0,
+    )
+
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    model.eval()
+
+    return model, {k: a[k] for k in ['d_model', 'encoder_layers', 'decoder_layers', 'n_heads', 'seq_len']}
+
+
 def load_model(model_type, checkpoint_path, feat_dim, device):
     """Load model based on type."""
     loaders = {
         'bert': load_bert_model,
         'lstm': load_lstm_model,
         'mlp': load_mlp_model,
+        'patchtst': load_patchtst_model,
     }
 
     if model_type not in loaders:

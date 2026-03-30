@@ -80,7 +80,7 @@ class PatchTSTEncoder(nn.Module):
             dropout=dropout,
             activation=activation,
             batch_first=True,
-            norm_first=False
+            norm_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
@@ -121,7 +121,7 @@ class PatchTSTDecoder(nn.Module):
             dropout=dropout,
             activation=activation,
             batch_first=True,
-            norm_first=False
+            norm_first=True
         )
         self.transformer_decoder = nn.TransformerEncoder(decoder_layer, num_layers=num_layers)
 
