@@ -19,7 +19,7 @@ echo "Started: $(date)"
 echo "Node: $SLURM_NODELIST"
 nvidia-smi
 
-python eval_masked_regression.py \
+python eval_forecasting.py \
     --model_type patchtst \
     --checkpoint patchtst_results/patchtst_training_20260328_174942/best_model.pt \
     --data_dir ./NGAFID-LOCI-GATS-Data/preprocessed_data/test \
