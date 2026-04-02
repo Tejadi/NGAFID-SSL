@@ -308,26 +308,9 @@ def evaluate_model(model, test_data, flight_ids, normalization_params, batch_siz
     from collections import defaultdict
     flight_score_accum = defaultdict(list)
 
-<<<<<<< HEAD
-            original_data = data.cpu().numpy()
-            masked_batch = []
-            batch_masks = []
-            for sequence, flight_id in zip(original_data, batch_ids):
-                _, masked_sequence, mask = mask_transform(
-                    sequence,
-                    masking_ratio=masking_ratio,
-                    mean_mask_length=mean_mask_length,
-                    mode='separate',
-                    distribution='geometric',
-                    random_seed=int(flight_id)
-                )
-                masked_batch.append(masked_sequence)
-                batch_masks.append(mask.numpy())
-=======
     for mask_sample_idx in range(num_mask_samples):
         if num_mask_samples > 1:
             print(f"  Mask sample {mask_sample_idx + 1}/{num_mask_samples}")
->>>>>>> d8dbde92e0c303240a52546b493141538c3edb05
 
         with torch.no_grad():
             for data, batch_ids in tqdm(test_loader, desc="Evaluating", unit="batch",
