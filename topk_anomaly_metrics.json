@@ -1,42 +1,49 @@
 {
-  "roc_auc": 0.515500067759859,
+  "roc_auc": 0.526341645209378,
   "total_flights": 1004,
   "total_anomalies": 376,
   "total_normal": 628,
+  "prevalence": 0.3745019920318725,
+  "score_stats": {
+    "anomalous_mean": 0.8807792168586178,
+    "anomalous_std": 0.43348465562236127,
+    "normal_mean": 0.9105985058815615,
+    "normal_std": 0.5075656525149809
+  },
   "topk_metrics": [
     {
       "k_pct": "1.0%",
       "k_abs": 11,
-      "precision": 0.2727,
-      "recall": 0.008,
-      "num_true_in_topk": 3,
+      "precision": 0.0909,
+      "recall": 0.0027,
+      "num_true_in_topk": 1,
       "num_retrieved": 11,
       "total_anomalies": 376
     },
     {
       "k_pct": "2.0%",
       "k_abs": 21,
-      "precision": 0.2381,
-      "recall": 0.0133,
-      "num_true_in_topk": 5,
+      "precision": 0.1905,
+      "recall": 0.0106,
+      "num_true_in_topk": 4,
       "num_retrieved": 21,
       "total_anomalies": 376
     },
     {
       "k_pct": "5.0%",
       "k_abs": 51,
-      "precision": 0.2549,
-      "recall": 0.0346,
-      "num_true_in_topk": 13,
+      "precision": 0.2157,
+      "recall": 0.0293,
+      "num_true_in_topk": 11,
       "num_retrieved": 51,
       "total_anomalies": 376
     },
     {
       "k_pct": "10.0%",
       "k_abs": 101,
-      "precision": 0.2178,
-      "recall": 0.0585,
-      "num_true_in_topk": 22,
+      "precision": 0.2277,
+      "recall": 0.0612,
+      "num_true_in_topk": 23,
       "num_retrieved": 101,
       "total_anomalies": 376
     }
