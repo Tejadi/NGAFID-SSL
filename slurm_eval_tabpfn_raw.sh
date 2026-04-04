@@ -27,6 +27,8 @@ echo "=========================================="
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export TABPFN_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiZGI4ZjJkMDgtNmFjZi00ZjI0LWFkZGItMGQ2N2I2NjBjOGNhIiwiZXhwIjoxODA2ODcyMzE3fQ.YXBqG555IJs0tZcHuGzlXXAO7U02c_CSeaYR6VxE_vI"
+export TABPFN_NO_BROWSER=1
+export TABPFN_MODEL_CACHE_DIR="$HOME/.cache/tabpfn"
 
 DATA_DIR="./NGAFID-LOCI-GATS-Data"
 EVENTS_FILE="$DATA_DIR/events.csv"
