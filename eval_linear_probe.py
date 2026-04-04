@@ -794,9 +794,17 @@ def main():
     # Load event labels
     event_flight_ids, event_type_flight_ids, event_types = load_event_labels(args.events_file)
 
-    # Compute normalization parameters
-    print("Computing normalization parameters...")
-    norm_params = compute_normalization_params(args.data_dir, args.model_type)
+    # Compute normalization parameters (cached to disk)
+    norm_cache = os.path.join(args.data_dir, f"norm_params_{args.model_type}.npz")
+    if os.path.exists(norm_cache):
+        print(f"Loading cached normalization parameters from {norm_cache}")
+        cached = np.load(norm_cache)
+        norm_params = {'mean': cached['mean'], 'std': cached['std']}
+    else:
+        print("Computing normalization parameters...")
+        norm_params = compute_normalization_params(args.data_dir, args.model_type)
+        np.savez(norm_cache, mean=norm_params['mean'], std=norm_params['std'])
+        print(f"Saved normalization parameters to {norm_cache}")
 
     # Load model
     print(f"Loading {args.model_type} model...")
