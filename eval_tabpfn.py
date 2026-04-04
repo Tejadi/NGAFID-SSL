@@ -337,7 +337,7 @@ def main():
     print("BINARY ANOMALY CLASSIFICATION")
     print("=" * 60)
 
-    tabpfn_clf = TabPFNClassifier(device=str(device), N_ensemble_configurations=32)
+    tabpfn_clf = TabPFNClassifier(device=str(device))
     logreg_clf = LogisticRegression(
         max_iter=1000, solver='lbfgs', random_state=args.seed,
         class_weight='balanced', C=1.0,
@@ -364,7 +364,7 @@ def main():
     print("AIRCRAFT TYPE CLASSIFICATION (3-way)")
     print("=" * 60)
 
-    tabpfn_clf2 = TabPFNClassifier(device=str(device), N_ensemble_configurations=32)
+    tabpfn_clf2 = TabPFNClassifier(device=str(device))
     logreg_clf2 = LogisticRegression(
         max_iter=1000, solver='lbfgs', random_state=args.seed,
         class_weight='balanced', C=1.0,
