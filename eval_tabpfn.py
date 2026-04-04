@@ -71,6 +71,8 @@ def parse_args():
     # TabPFN args
     parser.add_argument("--n_estimators", type=int, default=4,
                         help="Number of TabPFN estimators (ensemble size)")
+    parser.add_argument("--skip_per_event", action="store_true",
+                        help="Skip per-event-type classification (saves API quota)")
     parser.add_argument("--max_train_samples", type=int, default=None,
                         help="Max training samples for TabPFN (subsample if larger)")
     parser.add_argument("--pca_dim", type=int, default=100,
@@ -318,20 +320,16 @@ def main():
         y_train_sub = y_train
         y_train_aircraft_sub = y_train_aircraft
 
-    # ---- Import TabPFN (cloud client) ----
-    print("\nLoading TabPFN client...")
-    from tabpfn_client import TabPFNClassifier, set_access_token
-    token = os.environ.get("TABPFN_TOKEN", "")
-    if token:
-        set_access_token(token)
+    # ---- Import TabPFN (local, open-source v1) ----
+    print("\nLoading TabPFN (local)...")
+    from tabpfn import TabPFNClassifier
 
     # ---- Binary Anomaly Classification ----
     print("\n" + "=" * 60)
     print("BINARY ANOMALY CLASSIFICATION")
     print("=" * 60)
 
-    tabpfn_clf = TabPFNClassifier(
-    )
+    tabpfn_clf = TabPFNClassifier(device=str(device), N_ensemble_configurations=32)
     logreg_clf = LogisticRegression(
         max_iter=1000, solver='lbfgs', random_state=args.seed,
         class_weight='balanced', C=1.0,
@@ -358,8 +356,7 @@ def main():
     print("AIRCRAFT TYPE CLASSIFICATION (3-way)")
     print("=" * 60)
 
-    tabpfn_clf2 = TabPFNClassifier(
-    )
+    tabpfn_clf2 = TabPFNClassifier(device=str(device), N_ensemble_configurations=32)
     logreg_clf2 = LogisticRegression(
         max_iter=1000, solver='lbfgs', random_state=args.seed,
         class_weight='balanced', C=1.0,
@@ -386,7 +383,41 @@ def main():
         m = tabpfn_aircraft['per_class'][aircraft]
         print(f"  {aircraft:<15} F1={m['f1']:.4f}  AUC={m['roc_auc']:.4f}  n={m['support']}")
 
+    # ---- Save intermediate results (binary + aircraft) ----
+    os.makedirs(args.output_dir, exist_ok=True)
+    mode_tag = "raw" if args.raw_features else args.model_type
+    results = {
+        "mode": mode,
+        "model_type": args.model_type if not args.raw_features else "raw_summary_stats",
+        "checkpoint": args.checkpoint,
+        "pca_dim": args.pca_dim if pca is not None else None,
+        "pca_explained_variance": float(pca.explained_variance_ratio_.sum()) if pca is not None else None,
+        "train_flights": int(X_train.shape[0]),
+        "train_flights_used": int(X_train_sub.shape[0]),
+        "test_flights": int(X_test.shape[0]),
+        "representation_dim_original": int(X_train.shape[1]),
+        "representation_dim_used": int(X_train_scaled.shape[1]),
+        "anomaly_classification": {
+            "tabpfn": tabpfn_binary,
+            "logistic_regression": logreg_binary,
+        },
+        "aircraft_classification": {
+            "tabpfn": tabpfn_aircraft,
+            "logistic_regression": logreg_aircraft,
+        },
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    output_file = os.path.join(args.output_dir, f"tabpfn_{mode_tag}.json")
+    with open(output_file, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nIntermediate results saved to: {output_file}")
+
     # ---- Per-event-type classification with TabPFN ----
+    if args.skip_per_event:
+        print("\nSkipping per-event-type classification (--skip_per_event set).")
+        print(f"\nFinal results saved to: {output_file}")
+        return
+
     print("\n" + "=" * 60)
     print("PER-EVENT-TYPE ANOMALY CLASSIFICATION")
     print("=" * 60)
@@ -416,7 +447,7 @@ def main():
         X_tr_ev = X_train_scaled[idx] if idx is not None else X_train_scaled
 
         # TabPFN
-        tpfn = TabPFNClassifier()
+        tpfn = TabPFNClassifier(device=str(device), N_ensemble_configurations=32)
         tpfn.fit(X_tr_ev, y_tr_sub)
         tp_pred = tpfn.predict(X_test_scaled)
         tp_prob = tpfn.predict_proba(X_test_scaled)[:, 1]
@@ -454,41 +485,15 @@ def main():
     logreg_aucs = [v["roc_auc"] for v in logreg_per_event.values() if not v.get("skipped")]
     print(f"\nMacro AUC — TabPFN: {np.mean(tabpfn_aucs):.4f}, LogReg: {np.mean(logreg_aucs):.4f}")
 
-    # ---- Save results ----
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    mode_tag = "raw" if args.raw_features else args.model_type
-    results = {
-        "mode": mode,
-        "model_type": args.model_type if not args.raw_features else "raw_summary_stats",
-        "checkpoint": args.checkpoint,
-        "pca_dim": args.pca_dim if pca is not None else None,
-        "pca_explained_variance": float(pca.explained_variance_ratio_.sum()) if pca is not None else None,
-        "n_ensemble_configurations": args.n_ensemble_configurations,
-        "train_flights": int(X_train.shape[0]),
-        "train_flights_used": int(X_train_sub.shape[0]),
-        "test_flights": int(X_test.shape[0]),
-        "representation_dim_original": int(X_train.shape[1]),
-        "representation_dim_used": int(X_train_scaled.shape[1]),
-        "anomaly_classification": {
-            "tabpfn": tabpfn_binary,
-            "logistic_regression": logreg_binary,
-        },
-        "aircraft_classification": {
-            "tabpfn": tabpfn_aircraft,
-            "logistic_regression": logreg_aircraft,
-        },
-        "per_event_classification": {
-            "tabpfn": tabpfn_per_event,
-            "logistic_regression": logreg_per_event,
-        },
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    # ---- Update saved results with per-event results ----
+    results["per_event_classification"] = {
+        "tabpfn": tabpfn_per_event,
+        "logistic_regression": logreg_per_event,
     }
-
-    output_file = os.path.join(args.output_dir, f"tabpfn_{mode_tag}.json")
+    results["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
     with open(output_file, "w") as f:
         json.dump(results, f, indent=2)
-    print(f"\nResults saved to: {output_file}")
+    print(f"\nFinal results saved to: {output_file}")
 
 
 if __name__ == "__main__":
