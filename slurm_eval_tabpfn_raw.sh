@@ -28,7 +28,7 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 DATA_DIR="./NGAFID-LOCI-GATS-Data"
-EVENTS_FILE="$DATA_DIR/preprocessed_data/test/events.csv"
+EVENTS_FILE="$DATA_DIR/events.csv"
 OUTPUT_DIR="./tabpfn_results"
 
 python eval_tabpfn.py \
