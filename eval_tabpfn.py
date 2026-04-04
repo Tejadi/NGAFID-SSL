@@ -447,7 +447,7 @@ def main():
         X_tr_ev = X_train_scaled[idx] if idx is not None else X_train_scaled
 
         # TabPFN
-        tpfn = TabPFNClassifier(device=str(device), N_ensemble_configurations=32)
+        tpfn = TabPFNClassifier(device=str(device))
         tpfn.fit(X_tr_ev, y_tr_sub)
         tp_pred = tpfn.predict(X_test_scaled)
         tp_prob = tpfn.predict_proba(X_test_scaled)[:, 1]

@@ -15,7 +15,7 @@ mkdir -p logs
 source ~/.bashrc
 conda activate torch-gpu-12
 
-pip install tabpfn==0.1.9 --quiet
+pip install tabpfn --upgrade --quiet
 
 echo "=========================================="
 echo "SLURM Job ID: $SLURM_JOB_ID"
@@ -26,6 +26,7 @@ echo "=========================================="
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export TABPFN_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiZGI4ZjJkMDgtNmFjZi00ZjI0LWFkZGItMGQ2N2I2NjBjOGNhIiwiZXhwIjoxODA2ODcyMzE3fQ.YXBqG555IJs0tZcHuGzlXXAO7U02c_CSeaYR6VxE_vI"
 
 DATA_DIR="./NGAFID-LOCI-GATS-Data"
 EVENTS_FILE="$DATA_DIR/events.csv"
