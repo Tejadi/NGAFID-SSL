@@ -37,7 +37,7 @@ python eval_tabpfn.py \
     --events_file "$EVENTS_FILE" \
     --output_dir "$OUTPUT_DIR" \
     --pca_dim 0 \
-    --n_ensemble_configurations 32 \
+    --n_estimators 4 \
     --device auto
 
 echo "Done (exit $?). Results in: $OUTPUT_DIR"

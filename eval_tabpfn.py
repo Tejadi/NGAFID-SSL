@@ -69,8 +69,8 @@ def parse_args():
                         help="Output directory for results")
 
     # TabPFN args
-    parser.add_argument("--n_ensemble_configurations", type=int, default=32,
-                        help="Number of TabPFN ensemble configurations")
+    parser.add_argument("--n_estimators", type=int, default=4,
+                        help="Number of TabPFN estimators (ensemble size)")
     parser.add_argument("--max_train_samples", type=int, default=None,
                         help="Max training samples for TabPFN (subsample if larger)")
     parser.add_argument("--pca_dim", type=int, default=100,
@@ -328,7 +328,7 @@ def main():
     print("=" * 60)
 
     tabpfn_clf = TabPFNClassifier(
-        n_ensemble_configurations=args.n_ensemble_configurations,
+        n_estimators=args.n_estimators,
         device=str(device),
     )
     logreg_clf = LogisticRegression(
@@ -358,7 +358,7 @@ def main():
     print("=" * 60)
 
     tabpfn_clf2 = TabPFNClassifier(
-        n_ensemble_configurations=args.n_ensemble_configurations,
+        n_estimators=args.n_estimators,
         device=str(device),
     )
     logreg_clf2 = LogisticRegression(
@@ -417,7 +417,7 @@ def main():
         X_tr_ev = X_train_scaled[idx] if idx is not None else X_train_scaled
 
         # TabPFN
-        tpfn = TabPFNClassifier(n_ensemble_configurations=args.n_ensemble_configurations, device=str(device))
+        tpfn = TabPFNClassifier(n_estimators=args.n_estimators, device=str(device))
         tpfn.fit(X_tr_ev, y_tr_sub)
         tp_pred = tpfn.predict(X_test_scaled)
         tp_prob = tpfn.predict_proba(X_test_scaled)[:, 1]
