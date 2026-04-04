@@ -256,16 +256,33 @@ def main():
 
     # ---- Extract features ----
     if args.raw_features:
-        # Option B: raw summary statistics
-        print("\nExtracting raw summary-stat features...")
-        X_train, y_train, y_train_multi, y_train_aircraft, train_ids = extract_raw_features(
-            args.data_dir, "train", event_flight_ids, event_type_flight_ids,
-            event_types, norm_params, args.max_files,
-        )
-        X_test, y_test, y_test_multi, y_test_aircraft, test_ids = extract_raw_features(
-            args.data_dir, "test", event_flight_ids, event_type_flight_ids,
-            event_types, norm_params, args.max_files,
-        )
+        # Option B: raw summary statistics (cached to disk)
+        feat_cache = os.path.join(args.data_dir, "tabpfn_raw_features.npz")
+        if os.path.exists(feat_cache):
+            print(f"Loading cached raw features from {feat_cache}")
+            c = np.load(feat_cache, allow_pickle=True)
+            X_train, y_train, y_train_multi, y_train_aircraft, train_ids = (
+                c['X_train'], c['y_train'], c['y_train_multi'], c['y_train_aircraft'], c['train_ids'].tolist()
+            )
+            X_test, y_test, y_test_multi, y_test_aircraft, test_ids = (
+                c['X_test'], c['y_test'], c['y_test_multi'], c['y_test_aircraft'], c['test_ids'].tolist()
+            )
+        else:
+            print("\nExtracting raw summary-stat features...")
+            X_train, y_train, y_train_multi, y_train_aircraft, train_ids = extract_raw_features(
+                args.data_dir, "train", event_flight_ids, event_type_flight_ids,
+                event_types, norm_params, args.max_files,
+            )
+            X_test, y_test, y_test_multi, y_test_aircraft, test_ids = extract_raw_features(
+                args.data_dir, "test", event_flight_ids, event_type_flight_ids,
+                event_types, norm_params, args.max_files,
+            )
+            np.savez(feat_cache,
+                     X_train=X_train, y_train=y_train, y_train_multi=y_train_multi,
+                     y_train_aircraft=y_train_aircraft, train_ids=train_ids,
+                     X_test=X_test, y_test=y_test, y_test_multi=y_test_multi,
+                     y_test_aircraft=y_test_aircraft, test_ids=test_ids)
+            print(f"Saved raw features to {feat_cache}")
     else:
         # Option A: frozen encoder embeddings
         print(f"\nLoading {args.model_type} model...")
