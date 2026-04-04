@@ -318,9 +318,12 @@ def main():
         y_train_sub = y_train
         y_train_aircraft_sub = y_train_aircraft
 
-    # ---- Import TabPFN ----
-    print("\nLoading TabPFN...")
-    from tabpfn import TabPFNClassifier
+    # ---- Import TabPFN (cloud client) ----
+    print("\nLoading TabPFN client...")
+    from tabpfn_client import TabPFNClassifier, set_access_token
+    token = os.environ.get("TABPFN_TOKEN", "")
+    if token:
+        set_access_token(token)
 
     # ---- Binary Anomaly Classification ----
     print("\n" + "=" * 60)
@@ -328,8 +331,6 @@ def main():
     print("=" * 60)
 
     tabpfn_clf = TabPFNClassifier(
-        n_estimators=args.n_estimators,
-        device=str(device),
     )
     logreg_clf = LogisticRegression(
         max_iter=1000, solver='lbfgs', random_state=args.seed,
@@ -358,8 +359,6 @@ def main():
     print("=" * 60)
 
     tabpfn_clf2 = TabPFNClassifier(
-        n_estimators=args.n_estimators,
-        device=str(device),
     )
     logreg_clf2 = LogisticRegression(
         max_iter=1000, solver='lbfgs', random_state=args.seed,
@@ -417,7 +416,7 @@ def main():
         X_tr_ev = X_train_scaled[idx] if idx is not None else X_train_scaled
 
         # TabPFN
-        tpfn = TabPFNClassifier(n_estimators=args.n_estimators, device=str(device))
+        tpfn = TabPFNClassifier()
         tpfn.fit(X_tr_ev, y_tr_sub)
         tp_pred = tpfn.predict(X_test_scaled)
         tp_prob = tpfn.predict_proba(X_test_scaled)[:, 1]
