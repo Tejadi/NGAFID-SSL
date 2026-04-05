@@ -284,30 +284,47 @@ def main():
                      y_test_aircraft=y_test_aircraft, test_ids=test_ids)
             print(f"Saved raw features to {feat_cache}")
     else:
-        # Option A: frozen encoder embeddings
-        print(f"\nLoading {args.model_type} model...")
-        model = load_model(args.model_type, args.checkpoint, device)
-        if not args.no_compile and hasattr(torch, 'compile'):
-            model = torch.compile(model, mode='reduce-overhead')
+        # Option A: frozen encoder embeddings (cached to disk)
+        ckpt_tag = Path(args.checkpoint).stem
+        emb_cache = os.path.join(args.data_dir, f"tabpfn_embeddings_{args.model_type}_{ckpt_tag}.npz")
+        if os.path.exists(emb_cache):
+            print(f"Loading cached embeddings from {emb_cache}")
+            c = np.load(emb_cache, allow_pickle=True)
+            X_train, y_train, y_train_multi, y_train_aircraft, train_ids = (
+                c['X_train'], c['y_train'], c['y_train_multi'], c['y_train_aircraft'], c['train_ids'].tolist()
+            )
+            X_test, y_test, y_test_multi, y_test_aircraft, test_ids = (
+                c['X_test'], c['y_test'], c['y_test_multi'], c['y_test_aircraft'], c['test_ids'].tolist()
+            )
+        else:
+            print(f"\nLoading {args.model_type} model...")
+            model = load_model(args.model_type, args.checkpoint, device)
+            if not args.no_compile and hasattr(torch, 'compile'):
+                model = torch.compile(model, mode='reduce-overhead')
 
-        print("Extracting train representations...")
-        X_train, y_train, y_train_multi, y_train_aircraft, train_ids = extract_all_representations(
-            model, args.model_type, args.data_dir, "train",
-            event_flight_ids, event_type_flight_ids, event_types,
-            norm_params, device, args.max_files,
-            batch_size=args.batch_size, num_workers=args.num_workers,
-        )
-        print("Extracting test representations...")
-        X_test, y_test, y_test_multi, y_test_aircraft, test_ids = extract_all_representations(
-            model, args.model_type, args.data_dir, "test",
-            event_flight_ids, event_type_flight_ids, event_types,
-            norm_params, device, args.max_files,
-            batch_size=args.batch_size, num_workers=args.num_workers,
-        )
-        # Free GPU memory
-        del model
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            print("Extracting train representations...")
+            X_train, y_train, y_train_multi, y_train_aircraft, train_ids = extract_all_representations(
+                model, args.model_type, args.data_dir, "train",
+                event_flight_ids, event_type_flight_ids, event_types,
+                norm_params, device, args.max_files,
+                batch_size=args.batch_size, num_workers=args.num_workers,
+            )
+            print("Extracting test representations...")
+            X_test, y_test, y_test_multi, y_test_aircraft, test_ids = extract_all_representations(
+                model, args.model_type, args.data_dir, "test",
+                event_flight_ids, event_type_flight_ids, event_types,
+                norm_params, device, args.max_files,
+                batch_size=args.batch_size, num_workers=args.num_workers,
+            )
+            del model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            np.savez(emb_cache,
+                     X_train=X_train, y_train=y_train, y_train_multi=y_train_multi,
+                     y_train_aircraft=y_train_aircraft, train_ids=train_ids,
+                     X_test=X_test, y_test=y_test, y_test_multi=y_test_multi,
+                     y_test_aircraft=y_test_aircraft, test_ids=test_ids)
+            print(f"Saved embeddings to {emb_cache}")
 
     print(f"\nTrain: {X_train.shape[0]} flights, repr dim: {X_train.shape[1]}")
     print(f"  Anomaly positive rate: {y_train.mean():.1%}")
