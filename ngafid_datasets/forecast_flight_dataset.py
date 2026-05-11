@@ -303,7 +303,7 @@ class ForecastFlightDataset(IterableDataset):
             try:
                 # Read CSV file
                 df = pd.read_csv(csv_file, na_values=[' NaN', 'NaN', 'NaN ', 'nan'])
-                df = df.drop(columns=DERVIED_COLS)
+                # df = df.drop(columns=DERVIED_COLS)
 
                 # Select only numeric columns
                 numeric_cols = df.select_dtypes(include=[np.number]).columns
